@@ -1,354 +1,281 @@
-"""
-promptvc.core.storage
-~~~~~~~~~~~~~~~~~~~~~
-Dual-layer storage engine: in-memory dict (O(1) access) + JSON persistence.
-
-Architecture
-------------
-::
-
-    ┌─────────────────────────────────┐
-    │           PromptRepo            │  ← orchestration / public API
-    └────────────────┬────────────────┘
-                     │ uses
-    ┌────────────────▼────────────────┐
-    │         StorageEngine           │  ← THIS MODULE
-    │  ┌──────────────────────────┐   │
-    │  │  in-memory cache (dict)  │   │  O(1) reads after first load
-    │  └──────────┬───────────────┘   │
-    │             │ write-through      │
-    │  ┌──────────▼───────────────┐   │
-    │  │   .promptvc/<name>.json  │   │  durable persistence
-    │  └──────────────────────────┘   │
-    └─────────────────────────────────┘
-
-All file I/O is funnelled through :class:`StorageEngine`.  The rest of the
-codebase never touches ``open()`` or ``json`` directly.
-"""
-
 from __future__ import annotations
 
 import json
-import os
+import re
+import tempfile
 from pathlib import Path
-from typing import TypedDict, Optional
+from typing import Dict, List, Optional, TypedDict
 
 
-# ---------------------------------------------------------------------------
-# Type aliases & TypedDicts — act as the schema contract
-# ---------------------------------------------------------------------------
+# =========================
+# Exceptions
+# =========================
+
+class PromptVCError(Exception):
+    """Base exception for PromptVC."""
+
+
+class PromptSpaceNotFoundError(PromptVCError):
+    """Raised when a prompt space does not exist."""
+
+
+class VersionNotFoundError(PromptVCError):
+    """Raised when a version is not found."""
+
+
+class RepoNotInitializedError(PromptVCError):
+    """Raised when .promptvc directory is not initialized."""
+
+
+# =========================
+# TypedDict Schemas
+# =========================
 
 class VersionData(TypedDict):
-    """Schema for a single stored version."""
-
-    id: str              # "v1", "v2", …
-    prompt: str          # raw prompt text
-    message: str         # commit message
-    timestamp: str       # ISO-8601 datetime string
-    tokens: int          # estimated token count
-    locked: bool         # immutability flag
-    hash: str            # SHA-256 hex digest of the prompt
+    id: str
+    prompt: str
+    message: str
+    timestamp: str
+    tokens: int
+    locked: bool
+    hash: str
 
 
-class PromptSpaceData(TypedDict):
-    """Schema for the JSON file of a single prompt space."""
-
-    versions: dict[str, VersionData]   # keyed by version id
-    latest: Optional[str]              # e.g. "v3", or None if empty
+class PromptSpace(TypedDict):
+    versions: Dict[str, VersionData]
+    latest: Optional[str]  # Empty string or None before first commit
 
 
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-class StorageError(Exception):
-    """Base for all storage-layer exceptions."""
-
-
-class PromptSpaceNotFoundError(StorageError):
-    """Raised when referencing a prompt space that does not exist on disk."""
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-        super().__init__(
-            f"Prompt space '{name}' does not exist. "
-            "Use repo.commit() to create it."
-        )
-
-
-class VersionNotFoundError(StorageError):
-    """Raised when referencing a version that does not exist."""
-
-    def __init__(self, name: str, version: str) -> None:
-        self.name = name
-        self.version = version
-        super().__init__(
-            f"Version '{version}' does not exist in prompt space '{name}'."
-        )
-
-
-class RepoNotInitializedError(StorageError):
-    """Raised when trying to use the repo before :meth:`init_repo` is called."""
-
-    def __init__(self, repo_dir: Path) -> None:
-        self.repo_dir = repo_dir
-        super().__init__(
-            f"Repository not initialized at '{repo_dir}'. "
-            "Call repo.init_repo() first."
-        )
-
-
-# ---------------------------------------------------------------------------
-# Storage engine
-# ---------------------------------------------------------------------------
-
-REPO_DIR_NAME: str = ".promptvc"
-FILE_SUFFIX: str = ".json"
-_JSON_INDENT: int = 2
-
+# =========================
+# Storage Engine
+# =========================
 
 class StorageEngine:
     """
-    Manages all persistence for a single ``promptvc`` repository.
+    Handles persistence and retrieval of prompt spaces.
 
-    Parameters
-    ----------
-    root:
-        Project root directory.  Defaults to the current working directory.
-
-    The engine maintains a write-through in-memory cache so that repeated
-    reads within a session never hit disk.  Each :meth:`save_space` call
-    atomically writes to disk via a temp-file rename strategy to avoid
-    leaving corrupt JSON on crash.
+    - In-memory cache for O(1) repeated reads
+    - Atomic JSON writes via temp file + replace
+    - Strict name validation
     """
 
+    _SPACE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+$")
+
     def __init__(self, root: Optional[Path] = None) -> None:
-        self._root: Path = Path(root) if root else Path.cwd()
-        self._repo_dir: Path = self._root / REPO_DIR_NAME
+        self._root: Path = root or Path.cwd() / ".promptvc"
+        self._cache: Dict[str, PromptSpace] = {}
 
-        # In-memory cache: space_name → PromptSpaceData
-        self._cache: dict[str, PromptSpaceData] = {}
+    # -------------------------
+    # Initialization
+    # -------------------------
 
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
-
-    @property
-    def repo_dir(self) -> Path:
-        """Absolute path to the ``.promptvc`` directory."""
-        return self._repo_dir
+    def initialize(self) -> None:
+        """Create the storage directory if it does not exist."""
+        self._root.mkdir(parents=True, exist_ok=True)
 
     @property
     def is_initialized(self) -> bool:
-        """``True`` if the ``.promptvc`` directory exists."""
-        return self._repo_dir.is_dir()
+        """Return True if the storage directory exists."""
+        return self._root.exists() and self._root.is_dir()
 
-    # ------------------------------------------------------------------
-    # Repo lifecycle
-    # ------------------------------------------------------------------
-
-    def initialize(self) -> bool:
-        """
-        Create the ``.promptvc`` directory if it does not exist.
-
-        Returns:
-            ``True`` if the directory was created, ``False`` if it already existed.
-        """
-        if self._repo_dir.exists():
-            return False
-        self._repo_dir.mkdir(parents=True, exist_ok=True)
-        return True
-
-    def _assert_initialized(self) -> None:
+    def _ensure_initialized(self) -> None:
         if not self.is_initialized:
-            raise RepoNotInitializedError(self._repo_dir)
+            raise RepoNotInitializedError(
+                "Repository not initialized. Run `promptvc init` first."
+            )
 
-    # ------------------------------------------------------------------
-    # Space discovery
-    # ------------------------------------------------------------------
+    # -------------------------
+    # Validation
+    # -------------------------
 
-    def list_space_names(self) -> list[str]:
-        """
-        Return sorted list of all prompt space names in the repository.
+    def _validate_name(self, name: str) -> None:
+        if not self._SPACE_NAME_PATTERN.match(name):
+            raise ValueError(
+                f"Invalid prompt space name '{name}'. "
+                "Only alphanumeric characters, hyphens, and underscores are allowed."
+            )
 
-        Reads directory listing; does NOT rely on the cache so that
-        spaces created by other processes are visible.
-        """
-        self._assert_initialized()
-        return sorted(
-            p.stem
-            for p in self._repo_dir.iterdir()
-            if p.is_file() and p.suffix == FILE_SUFFIX
-        )
+    def _space_path(self, name: str) -> Path:
+        return self._root / f"{name}.json"
 
-    def space_exists(self, name: str) -> bool:
-        """Return ``True`` if a JSON file exists for *name*."""
-        return self._space_path(name).is_file()
-
-    # ------------------------------------------------------------------
-    # Load / save
-    # ------------------------------------------------------------------
-
-    def load_space(self, name: str) -> PromptSpaceData:
-        """
-        Load a prompt space into the cache and return it.
-
-        Cache-hit: returns immediately without disk I/O.
-        Cache-miss: reads JSON from disk, populates cache, returns data.
-
-        Raises:
-            PromptSpaceNotFoundError: If no file exists for *name*.
-        """
-        self._assert_initialized()
-
-        if name in self._cache:
-            return self._cache[name]
-
-        path = self._space_path(name)
-        if not path.is_file():
-            raise PromptSpaceNotFoundError(name)
-
-        with path.open("r", encoding="utf-8") as fh:
-            raw: dict = json.load(fh)
-
-        data: PromptSpaceData = {
-            "versions": raw.get("versions", {}),
-            "latest": raw.get("latest", None),
-        }
-        self._cache[name] = data
-        return data
-
-    def save_space(self, name: str, data: PromptSpaceData) -> None:
-        """
-        Persist *data* to disk and update the in-memory cache.
-
-        Uses an atomic write (write to ``<name>.tmp`` then rename) so a
-        crash mid-write never corrupts the existing JSON file.
-
-        Args:
-            name: Prompt space name.
-            data: Full space data to persist.
-        """
-        self._assert_initialized()
-
-        path = self._space_path(name)
-        tmp_path = path.with_suffix(".tmp")
-
-        try:
-            with tmp_path.open("w", encoding="utf-8") as fh:
-                json.dump(data, fh, indent=_JSON_INDENT, ensure_ascii=False)
-            # Atomic rename — on POSIX this is guaranteed atomic;
-            # on Windows it replaces atomically since Python 3.3+.
-            os.replace(tmp_path, path)
-        except Exception:
-            # Clean up temp file on failure
-            if tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
-            raise
-
-        # Update cache *after* successful disk write
-        self._cache[name] = data
-
-    def load_or_create_space(self, name: str) -> PromptSpaceData:
-        """
-        Return existing space data or return a fresh empty space.
-
-        Does NOT write to disk — the caller must call :meth:`save_space`.
-        """
-        if self.space_exists(name):
-            return self.load_space(name)
-        return {"versions": {}, "latest": None}
-
-    # ------------------------------------------------------------------
-    # Version helpers
-    # ------------------------------------------------------------------
-
-    def get_version(self, name: str, version: str) -> VersionData:
-        """
-        Retrieve a specific version from *name*.
-
-        Args:
-            name:    Prompt space name.
-            version: Version id (e.g. ``"v1"``).
-
-        Raises:
-            PromptSpaceNotFoundError: If the space does not exist.
-            VersionNotFoundError:     If *version* does not exist in the space.
-        """
-        data = self.load_space(name)
-        if version not in data["versions"]:
-            raise VersionNotFoundError(name, version)
-        return data["versions"][version]
-
-    def next_version_id(self, data: PromptSpaceData) -> str:
-        """
-        Compute the next sequential version id.
-
-        Parses existing numeric suffixes (``v1`` → ``1``) and returns
-        ``v{max + 1}``.  Returns ``"v1"`` for an empty space.
-
-        Args:
-            data: The current space data (may have zero versions).
-
-        Returns:
-            A version string like ``"v1"``, ``"v2"``, etc.
-        """
-        if not data["versions"]:
-            return "v1"
-
-        indices: list[int] = []
-        for vid in data["versions"]:
-            try:
-                indices.append(int(vid.lstrip("v")))
-            except ValueError:
-                pass  # skip non-standard ids — future-proof
-
-        return f"v{max(indices) + 1}" if indices else "v1"
-
+    # -------------------------
+    # Cache
+    # -------------------------
     def invalidate_cache(self, name: Optional[str] = None) -> None:
         """
-        Evict entries from the in-memory cache.
+        Invalidate cache for a specific space, or all spaces if name is None.
 
-        Args:
-            name: If given, evict only that space.  If ``None``, flush all.
+        Useful in tests and when external writes are expected.
         """
         if name is None:
             self._cache.clear()
         else:
             self._cache.pop(name, None)
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
+    # -------------------------
+    # Core I/O
+    # -------------------------
 
-    def _space_path(self, name: str) -> Path:
-        """Return the absolute path for *name*'s JSON file."""
-        safe_name = self._sanitize_name(name)
-        return self._repo_dir / f"{safe_name}{FILE_SUFFIX}"
-
-    @staticmethod
-    def _sanitize_name(name: str) -> str:
+    def load_space(self, name: str) -> PromptSpace:
         """
-        Validate and return a safe file-system name.
+        Load a prompt space from cache or disk.
 
         Raises:
-            ValueError: If *name* contains path separators or is empty.
+            PromptSpaceNotFoundError: If no file exists for this space.
+            PromptVCError: If stored JSON is corrupted.
         """
-        stripped = name.strip()
-        if not stripped:
-            raise ValueError("Prompt space name must not be empty.")
-        forbidden = set("/\\:*?\"<>|")
-        bad = forbidden.intersection(stripped)
-        if bad:
-            raise ValueError(
-                f"Prompt space name '{stripped}' contains forbidden characters: "
-                f"{', '.join(sorted(bad))}."
-            )
-        return stripped
+        import copy
 
-    def __repr__(self) -> str:
-        return (
-            f"StorageEngine(root={self._root!r}, "
-            f"initialized={self.is_initialized}, "
-            f"cached_spaces={list(self._cache)})"
-        )
+        self._ensure_initialized()
+        self._validate_name(name)
+
+        # Return from cache (safe copy)
+        if name in self._cache:
+            return copy.deepcopy(self._cache[name])
+
+        file_path = self._space_path(name)
+        if not file_path.exists():
+            raise PromptSpaceNotFoundError(
+                f"Prompt space '{name}' does not exist. "
+                "Use `commit` to create it."
+            )
+
+        try:
+            with file_path.open("r", encoding="utf-8") as f:
+                data: PromptSpace = json.load(f)
+        except json.JSONDecodeError as e:
+            raise PromptVCError(
+                f"Corrupted data in prompt space '{name}'."
+            ) from e
+
+        # Store safe copy in cache
+        self._cache[name] = data
+
+        return copy.deepcopy(data)
+
+    def save_space(self, name: str, data: PromptSpace) -> None:
+        """
+        Atomically persist a prompt space to disk and update cache.
+
+        Uses a temp file + replace for crash safety.
+
+        Raises:
+            PromptVCError: If persistence fails.
+        """
+        import copy
+        import os
+
+        self._ensure_initialized()
+        self._validate_name(name)
+
+        file_path = self._space_path(name)
+        temp_path: Optional[Path] = None
+
+        try:
+            # Ensure directory exists (handles deletion mid-run)
+            self._root.mkdir(parents=True, exist_ok=True)
+
+            with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    delete=False,
+                    dir=self._root,
+                    suffix=".tmp",
+                    encoding="utf-8",
+            ) as tmp:
+                json.dump(data, tmp, indent=2)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                temp_path = Path(tmp.name)
+
+            # Atomic replace
+            temp_path.replace(file_path)
+
+        except Exception as e:
+            # Cleanup temp file if it exists
+            if temp_path and temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass  # best-effort cleanup
+
+            raise PromptVCError(
+                f"Failed to persist prompt space '{name}'."
+            ) from e
+
+        # Update cache only after successful write
+        self._cache[name] = copy.deepcopy(data)
+
+    def load_or_create_space(self, name: str) -> PromptSpace:
+        """
+        Return an existing space, or return a fresh in-memory space.
+
+        Does NOT write to disk — the caller (commit) persists on first save.
+        This avoids creating empty .json files for uncommitted spaces.
+        """
+        try:
+            return self.load_space(name)
+        except PromptSpaceNotFoundError:
+            return {"versions": {}, "latest": None}
+
+    # Version Access
+    # -------------------------
+
+    def get_version(self, name: str, version: str) -> VersionData:
+        """
+        Return a specific version from a space.
+
+        Raises:
+            VersionNotFoundError: If the version ID does not exist.
+        """
+        space = self.load_space(name)
+
+        if version not in space["versions"]:
+            raise VersionNotFoundError(
+                f"Version '{version}' not found in space '{name}'."
+            )
+
+        return space["versions"][version]
+
+    def append_run(self, name: str, run_data: dict) -> None:
+        """
+        Append a run record to a prompt space.
+
+        Ensures backward compatibility by creating 'runs' if missing.
+        """
+        space = self.load_space(name)
+
+        runs = space.setdefault("runs", [])
+        runs.append(run_data)
+
+        self.save_space(name, space)
+
+    def next_version_id(self, space: PromptSpace) -> str:
+        """
+        Generate the next sequential version ID (v1, v2, v3, ...).
+
+        Derives the next ID from the highest existing numeric suffix.
+        """
+        versions = space.get("versions", {})
+        nums = [self._version_num(v) for v in versions if self._version_num(v) is not None]
+        next_num = (max(nums) + 1) if nums else 1  # type: ignore[arg-type]
+        return f"v{next_num}"
+
+    def list_space_names(self) -> List[str]:
+        """Return the names of all persisted prompt spaces."""
+        self._ensure_initialized()
+        return [f.stem for f in self._root.glob("*.json")]
+
+    # -------------------------
+    # Helpers
+    # -------------------------
+
+    @staticmethod
+    def _version_num(version_id: str) -> Optional[int]:
+        """
+        Parse the numeric suffix from a version ID string (e.g. 'v3' → 3).
+
+        Returns None for malformed IDs.
+        """
+        if version_id.startswith("v") and version_id[1:].isdigit():
+            return int(version_id[1:])
+        return None

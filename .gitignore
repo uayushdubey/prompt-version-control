@@ -1,5 +1,10 @@
 .promptvc/
-.venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .env
+venv/
+dist/
+build/
+*.egg-info/

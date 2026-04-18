@@ -1,182 +1,229 @@
-"""
-promptvc.core.tokenizer
-~~~~~~~~~~~~~~~~~~~~~~~
-Token counting abstraction layer.
-
-Designed to be swappable — plug in tiktoken, HuggingFace tokenizers,
-or any other backend without touching the rest of the codebase.
-"""
-
 from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from typing import Protocol, runtime_checkable
+from typing import Dict, List, Optional, Type, Protocol
 
 
-# ---------------------------------------------------------------------------
-# Protocol — duck-typing friendly interface for external tokenizers
-# ---------------------------------------------------------------------------
+# =========================
+# Protocol
+# =========================
 
-@runtime_checkable
 class TokenizerProtocol(Protocol):
-    """
-    Structural protocol any tokenizer must satisfy.
-    Allows drop-in replacement without inheritance.
-    """
+    """Structural protocol for tokenizer duck-typing."""
 
     def count(self, text: str) -> int:
-        """Return the number of tokens in *text*."""
         ...
 
 
-# ---------------------------------------------------------------------------
-# Abstract base — for tokenizers that prefer inheritance
-# ---------------------------------------------------------------------------
+# =========================
+# Base Class
+# =========================
 
 class BaseTokenizer(ABC):
-    """Abstract base for inheritance-based tokenizer implementations."""
+    """Abstract base for all tokenizer implementations."""
 
     @abstractmethod
     def count(self, text: str) -> int:
-        """Return the number of tokens in *text*."""
+        """Return the token count for the given text."""
+        raise NotImplementedError
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}()"
+        return f"<{self.__class__.__name__}>"
 
 
-# ---------------------------------------------------------------------------
-# Built-in implementations
-# ---------------------------------------------------------------------------
+# =========================
+# Built-in Tokenizers
+# =========================
 
 class WhitespaceTokenizer(BaseTokenizer):
-    """
-    Naïve whitespace-based tokenizer.
-
-    Splits on any whitespace and filters empty strings.
-    Suitable for quick estimates; ~30-50 % accurate vs. GPT-4 tokenizer.
-
-    Complexity: O(n) time, O(n) space.
-    """
+    """Splits on whitespace. Fast and predictable."""
 
     def count(self, text: str) -> int:
-        if not text or not text.strip():
+        if not text:
             return 0
         return len(text.split())
 
 
 class WordPunctTokenizer(BaseTokenizer):
     """
-    Slightly smarter tokenizer that splits on whitespace *and* punctuation,
-    mimicking the word-piece behaviour of many LLM tokenizers more closely.
+    Splits into words and punctuation tokens via regex.
 
-    Still O(n) — no external dependencies.
+    More granular than whitespace splitting; useful for
+    prompts with heavy punctuation.
     """
 
-    # Punctuation characters that typically become separate tokens
-    _PUNCT_PATTERN = re.compile(r"(\s+|[.,!?;:\"'()\[\]{}<>/\\|@#$%^&*\-_+=`~])")
-
-    def count(self, text: str) -> int:
-        if not text or not text.strip():
-            return 0
-        tokens = [t for t in self._PUNCT_PATTERN.split(text) if t and not t.isspace()]
-        return len(tokens)
-
-
-class CharacterEstimateTokenizer(BaseTokenizer):
-    """
-    Character-ratio estimator.
-
-    OpenAI's rule of thumb: ~4 characters per token for English text.
-    Fast O(1) character count — no splitting required.
-    """
-
-    CHARS_PER_TOKEN: float = 4.0
+    _pattern = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
     def count(self, text: str) -> int:
         if not text:
             return 0
-        return max(1, round(len(text) / self.CHARS_PER_TOKEN))
+        return len(self._pattern.findall(text))
 
 
-# ---------------------------------------------------------------------------
-# Registry — allows future plug-in tokenizers by name
-# ---------------------------------------------------------------------------
+class CharacterEstimateTokenizer(BaseTokenizer):
+    """
+    Approximates token count from character length.
 
-_REGISTRY: dict[str, type[BaseTokenizer]] = {
+    Heuristic: 1 token ≈ 4 characters (common LLM rule of thumb).
+    Returns 0 for empty input.
+    """
+
+    _CHARS_PER_TOKEN = 4
+
+    def count(self, text: str) -> int:
+        if not text:
+            return 0
+        return len(text) // self._CHARS_PER_TOKEN
+
+
+# =========================
+# Registry
+# =========================
+
+_REGISTRY: Dict[str, Type[BaseTokenizer]] = {
     "whitespace": WhitespaceTokenizer,
     "wordpunct": WordPunctTokenizer,
     "character": CharacterEstimateTokenizer,
 }
 
+_BUILTIN_NAMES: frozenset[str] = frozenset(_REGISTRY.keys())
 
-def get_tokenizer(name: str = "whitespace") -> BaseTokenizer:
+# Default alias used by PromptRepo when no tokenizer is specified
+Tokenizer = WhitespaceTokenizer
+
+
+# =========================
+# Registry Functions
+# =========================
+
+def get_tokenizer(name: str) -> BaseTokenizer:
     """
-    Retrieve a tokenizer instance by registered name.
-
-    Args:
-        name: One of ``"whitespace"``, ``"wordpunct"``, ``"character"``.
-
-    Returns:
-        A :class:`BaseTokenizer` instance.
+    Return a tokenizer instance by registered name.
 
     Raises:
-        ValueError: If *name* is not registered.
-
-    Example::
-
-        tokenizer = get_tokenizer("wordpunct")
-        token_count = tokenizer.count("Hello, world!")
+        ValueError: If name is empty or not registered.
     """
-    key = name.lower().strip()
+    if not name:
+        raise ValueError("Tokenizer name cannot be empty.")
+
+    key = name.strip().lower()
+
     if key not in _REGISTRY:
         available = ", ".join(sorted(_REGISTRY))
         raise ValueError(
-            f"Unknown tokenizer '{name}'. Available: {available}. "
-            "Register a custom tokenizer with register_tokenizer()."
+            f"Tokenizer '{name}' is not registered. "
+            f"Available: {available}"
         )
+
     return _REGISTRY[key]()
 
 
-def register_tokenizer(name: str, cls: type[BaseTokenizer]) -> None:
+def register_tokenizer(
+    name: str,
+    cls: Type[BaseTokenizer],
+    *,
+    force: bool = False,
+) -> None:
     """
-    Register a custom tokenizer class under *name*.
-
-    This is the extension point for external tokenizers (e.g. tiktoken).
+    Register a custom tokenizer class.
 
     Args:
-        name:  Unique name for this tokenizer.
-        cls:   A :class:`BaseTokenizer` subclass (not an instance).
+        name:  Unique identifier for the tokenizer.
+        cls:   Class inheriting from BaseTokenizer.
+        force: If True, overwrite an existing custom registration.
+               Built-in tokenizers cannot be overwritten.
 
     Raises:
-        TypeError: If *cls* does not subclass :class:`BaseTokenizer`.
-        ValueError: If *name* is already registered.
-
-    Example::
-
-        class TiktokenWrapper(BaseTokenizer):
-            def count(self, text: str) -> int:
-                import tiktoken
-                enc = tiktoken.get_encoding("cl100k_base")
-                return len(enc.encode(text))
-
-        register_tokenizer("tiktoken", TiktokenWrapper)
+        ValueError: If name is invalid, already registered, or is a built-in.
+        TypeError:  If cls does not inherit BaseTokenizer.
     """
-    if not (isinstance(cls, type) and issubclass(cls, BaseTokenizer)):
-        raise TypeError(
-            f"cls must be a subclass of BaseTokenizer, got {cls!r}."
-        )
-    if name in _REGISTRY:
+    if not name:
+        raise ValueError("Tokenizer name cannot be empty.")
+
+    key = name.strip().lower()
+
+    if key in _BUILTIN_NAMES:
         raise ValueError(
-            f"A tokenizer named '{name}' is already registered. "
-            "Use a different name or unregister it first."
+            f"Cannot overwrite built-in tokenizer '{name}'."
         )
-    _REGISTRY[name] = cls
+
+    if key in _REGISTRY and not force:
+        raise ValueError(
+            f"Tokenizer '{name}' is already registered. "
+            "Pass force=True to overwrite."
+        )
+
+    if not issubclass(cls, BaseTokenizer):
+        raise TypeError(
+            f"{cls.__name__} must inherit from BaseTokenizer."
+        )
+
+    _REGISTRY[key] = cls
 
 
 def unregister_tokenizer(name: str) -> None:
-    """Remove a previously registered tokenizer (useful in tests)."""
-    built_ins = {"whitespace", "wordpunct", "character"}
-    if name in built_ins:
-        raise ValueError(f"Cannot unregister built-in tokenizer '{name}'.")
-    _REGISTRY.pop(name, None)
+    """
+    Remove a custom tokenizer from the registry.
+
+    Built-in tokenizers cannot be removed.
+
+    Raises:
+        ValueError: If name is a built-in or not registered.
+    """
+    if not name:
+        raise ValueError("Tokenizer name cannot be empty.")
+
+    key = name.strip().lower()
+
+    if key in _BUILTIN_NAMES:
+        raise ValueError(
+            f"Cannot unregister built-in tokenizer '{name}'."
+        )
+
+    if key not in _REGISTRY:
+        raise ValueError(
+            f"Tokenizer '{name}' is not registered."
+        )
+
+    del _REGISTRY[key]
+
+
+def list_tokenizers(*, include_builtins: bool = True) -> List[str]:
+    """
+    Return names of all registered tokenizers.
+
+    Args:
+        include_builtins: If False, only custom tokenizers are returned.
+    """
+    if include_builtins:
+        return sorted(_REGISTRY.keys())
+
+    return sorted(k for k in _REGISTRY if k not in _BUILTIN_NAMES)
+
+
+def get_tokenizer_info(name: str) -> Dict[str, object]:
+    """
+    Return metadata about a registered tokenizer.
+
+    Returns a dict with keys: name, class, builtin.
+    Useful for CLI introspection and debugging.
+    """
+    if not name:
+        raise ValueError("Tokenizer name cannot be empty.")
+
+    key = name.strip().lower()
+
+    if key not in _REGISTRY:
+        available = ", ".join(sorted(_REGISTRY))
+        raise ValueError(
+            f"Tokenizer '{name}' not found. Available: {available}"
+        )
+
+    cls = _REGISTRY[key]
+    return {
+        "name": key,
+        "class": cls.__name__,
+        "builtin": key in _BUILTIN_NAMES,
+        "doc": cls.__doc__ or "",
+    }
