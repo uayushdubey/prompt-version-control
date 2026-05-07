@@ -1,42 +1,58 @@
 from __future__ import annotations
 
-from promptvc.core import PromptVCError
+import argparse
+
 from promptvc.cli.utils import get_repo, require_arg
 
 
-def handle(args) -> None:
+def handle(args: argparse.Namespace) -> None:
     """Handle `promptvc commit <name>` — supports inline args or interactive fallback."""
     repo = get_repo()
     if repo is None:
         return
 
-    try:
-        name = require_arg(args, "name")
-        if name is None:
-            return
+    name = require_arg(args, "name")
+    if name is None:
+        return
 
-        prompt = getattr(args, "prompt", None) or _read_input("Enter prompt:")
-        if prompt is None:
-            return
+    prompt = _resolve("prompt", getattr(args, "prompt", None), "Enter prompt:")
+    if prompt is None:
+        return
 
-        message = getattr(args, "message", None) or _read_input("Enter commit message:")
-        if message is None:
-            return
+    message = _resolve("message", getattr(args, "message", None), "Enter commit message:")
+    if message is None:
+        return
 
-        result = repo.commit(name, prompt, message)
-        print(f"\n✓ Committed {result['id']}  [{result['tokens']} tokens]")
-
-    except PromptVCError as exc:
-        print(f"✗ {exc}")
-    except ValueError as exc:
-        print(f"✗ Invalid input: {exc}")
+    result = repo.commit(name, prompt, message)
+    print(f"\n✓ Committed {result['id']}  [{result['tokens']} tokens]")
 
 
-def _read_input(prompt_label: str) -> str | None:
-    """Prompt user for non-empty input. Returns None if empty."""
+def _resolve(field: str, value: str | None, prompt_label: str) -> str | None:
+    """
+    Return value if provided, otherwise prompt interactively.
+
+    Returns None if the value is empty or input is aborted.
+    """
+    if value and value.strip():
+        return value.strip()
+    return _read_input(field, prompt_label)
+
+
+def _read_input(field: str, prompt_label: str) -> str | None:
+    """
+    Prompt user for non-empty input.
+
+    Returns None on empty input, EOF, or keyboard interrupt.
+    """
     print(f"\n{prompt_label}\n")
-    value = input("> ").strip()
-    if not value:
-        print(f"✗ {prompt_label.rstrip(':').lower()} cannot be empty.")
+    try:
+        value = input("> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n✗ Input cancelled.")
         return None
+
+    if not value:
+        print(f"✗ {field} cannot be empty.")
+        return None
+
     return value
