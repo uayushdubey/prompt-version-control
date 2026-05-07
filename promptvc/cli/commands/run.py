@@ -3,22 +3,44 @@ from __future__ import annotations
 import argparse
 
 from promptvc.core.repo import PromptRepo
-from promptvc.core import PromptVCError
 from promptvc.providers.mock import MockProvider
+
+# Provider registry — add new providers here as they become available
+_PROVIDER_REGISTRY = {
+    "mock": MockProvider(),
+}
+
+
+def _resolve_provider(name: str):
+    """
+    Return the provider instance for the given name.
+
+    Raises:
+        ValueError: If the provider is not registered.
+    """
+    provider = _PROVIDER_REGISTRY.get(name)
+    if provider is None:
+        available = ", ".join(f"'{k}'" for k in _PROVIDER_REGISTRY)
+        raise ValueError(
+            f"Provider '{name}' not found. Available providers: {available}"
+        )
+    return provider
 
 
 def run_command(args: argparse.Namespace) -> None:
+    provider_name = getattr(args, "provider", None) or "mock"
+    provider = _resolve_provider(provider_name)
+
     repo = PromptRepo()
-    provider = MockProvider()
+    result = repo.run(args.name, args.version, provider)
 
-    try:
-        result = repo.run(args.name, args.version, provider)
+    output = result.get("output")
+    if output is None:
+        raise ValueError("Provider returned no output.")
 
-        print(f"\n✓ Ran {args.name}@{args.version}")
-        print(f"\nOutput:\n{result['output']}")
-        print(f"\nTokens: {result['tokens']}")
+    tokens = result.get("tokens")
 
-    except PromptVCError as exc:
-        print(f"✗ {exc}")
-    except ValueError as exc:
-        print(f"✗ Invalid input: {exc}")
+    print(f"\n✓ Ran {args.name}@{args.version}")
+    print(f"\nOutput:\n{output}")
+    if tokens is not None:
+        print(f"\nTokens: {tokens}")
