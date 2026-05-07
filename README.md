@@ -1,310 +1,341 @@
 # promptvc
 
-**Test, version, and ship LLM prompts without breaking production.**
+Git for prompts — a version control system for LLM prompts.
 
 ---
 
-promptvc is a Python CLI tool that brings version control and reproducibility to LLM prompts. It tracks prompt changes, diffs versions at the token and semantic level, executes prompts against configured providers, and replays exact historical runs giving you a verifiable record of what ran, when, and what it returned.
+## What This Project Is
+
+promptvc is a command-line tool for managing, executing, and auditing LLM prompts with the same discipline applied to source code. It treats prompts as versioned artifacts: immutable, traceable, and executable.
+
+It is not a prompt playground. It is not a wrapper around an LLM API. It is infrastructure for teams and engineers who need to manage prompts with the same rigor they apply to code.
 
 ---
 
 ## The Problem
 
-LLM prompts in most codebases are strings — hardcoded in source files, passed around as constants, edited in-place, and deployed with no audit trail. When a prompt changes and model output degrades, there is no structured way to identify what changed, when it changed, or what the output looked like before.
+Prompts are increasingly load-bearing logic in production systems. Yet most teams manage them in ways they would never manage application code: pasted into Notion, hardcoded into scripts, modified in place with no history, and tested informally if at all.
 
-This results in real operational problems:
+When a prompt changes, there is typically no record of what changed, who changed it, why, or what the output looked like before and after. When something breaks, there is no baseline to roll back to. When a team member wants to know which version of a prompt is currently in production, there is no answer.
 
-- A prompt gets tweaked during debugging and committed with the rest of a feature diff. A week later, output quality degrades. No one remembers what changed.
-- Token counts shift across iterations, pushing requests over context limits or inflating inference costs, with no per-version record to compare against.
-- Two engineers are iterating on the same prompt in parallel. One version gets shipped. There is no agreed-upon way to evaluate which performed better.
-- A production issue is traced to model output. Reproducing the exact run the exact prompt text, model version, and parameters is not possible because that state was never captured.
-
-The core issue is not that prompts are hard to write. It is that they are treated as configuration managed with none of the rigor applied to code.
+This is not sustainable as LLM usage matures.
 
 ---
 
 ## What promptvc Does
 
-promptvc models prompts as first-class versioned artifacts. Each time you commit a prompt, promptvc records the full text, a SHA-256 hash, a token count, and a timestamp. Versions are immutable. Once committed, a version cannot be overwritten — only superseded by a new one. This gives you a reliable history you can audit, compare, and return to.
+promptvc gives prompts the properties that source code has always had:
 
-The diff system operates at two levels. Token-level diffs show exactly which tokens were added or removed between two versions. Semantic diffs surface structural changes shifts in instruction framing, role assignments, or output constraints that token diffs can obscure. When you are iterating toward a target behavior, being able to state precisely what changed is the difference between deliberate engineering and guesswork.
-
-The run system executes prompts against a configured provider, records the full request and response, and stores the run against its prompt version. Every run is replayable. If you need to reproduce what happened on a specific version at a specific point in time, you can — without relying on memory or reconstructed state.
-
----
-
-## Quick Example
-
-```bash
-# Initialize a promptvc workspace in the current directory
-$ promptvc init
-
-Initialized promptvc workspace at .promptvc/
-
-# Create a prompt space and commit the first version
-$ promptvc commit summarizer "Summarize the following text in three sentences. Be concise and factual."
-
-[summarizer] v1 committed
-  hash: a3f2c1d8
-  tokens: 17
-  timestamp: 2025-05-07T10:22:01Z
-
-# Iterate on the prompt and commit a new version
-$ promptvc commit summarizer "Summarize the following text in three sentences. Prioritize key facts. Avoid editorial language."
-
-[summarizer] v2 committed
-  hash: 9b4e77f1
-  tokens: 20
-  timestamp: 2025-05-07T10:31:45Z
-
-# Diff the two versions
-$ promptvc diff summarizer v1 v2
-
---- summarizer/v1
-+++ summarizer/v2
-  Summarize the following text in three sentences.
-- Be concise and factual.
-+ Prioritize key facts. Avoid editorial language.
-
-Token delta: +3 (17 -> 20)
-
-# Execute the current version
-$ promptvc run summarizer --input "The quarterly report showed a 12% increase in operating margin..."
-
-[summarizer] v2 executed
-  run_id: run_00042
-  tokens_in: 20 | tokens_out: 61
-  duration: 1.2s
-
-Output:
-  The company reported a 12% improvement in operating margin for the quarter...
-```
-
----
-
-## Core Concepts
-
-**Prompt Spaces**
-
-A prompt space is a named container for a single logical prompt and all its versions. Spaces map to discrete functions in your application a classifier, a summarizer, an extraction prompt, a system message and keep version history scoped and searchable. A space named `invoice-extractor` holds only the versions and runs for that prompt.
-
-**Versions**
-
-Each commit to a space creates a new version (`v1`, `v2`, `v3`, ...). Versions are immutable. Committing the same text twice produces two separate version records, each with its own hash and timestamp. This is intentional: the record reflects what you shipped and when, not just what the current text is.
-
-Each version stores:
-- Full prompt text
-- SHA-256 content hash
-- Token count (using the provider's tokenizer, or a configurable default)
-- Commit timestamp
-- Optional message
-
-**Runs**
-
-A run is an execution record tied to a specific version. It stores the full input, the raw model response, token usage, latency, and run parameters. Runs are indexed by run ID and are replayable: `promptvc replay run_00042` reconstructs and re-executes the exact request.
-
-**Storage Model**
-
-All data is stored locally under `.promptvc/` as structured JSON. There is no remote dependency, no daemon, and no background process. The directory is designed to be committed to source control alongside your code, giving your team a shared history of prompt changes correlated with code changes.
-
-```
-.promptvc/
-  config.json          # Workspace config and provider settings
-  spaces/
-    summarizer/
-      versions.json    # Ordered version history
-      runs/
-        run_00042.json # Individual run records
-```
+- **Versioning.** Every prompt is stored as an immutable, timestamped version. Commits are explicit and require a message.
+- **Execution.** Prompts can be run against a configured provider. Results are recorded alongside the version that produced them.
+- **Reproducibility.** Any version can be retrieved and re-executed. Run history is preserved per version.
+- **Code modification.** Prompts can be applied to files via an LLM-powered apply pipeline that generates a strict unified diff, requires confirmation, and logs every change made.
 
 ---
 
 ## Key Capabilities
 
-**Immutable Version History**
+### Prompt Versioning
 
-Versions are append-only. Each commit is identified by an auto-incrementing version number and a content hash. You can reference any version by number or hash in diff, run, and replay commands. There is no `--force` flag on a committed version.
+Every commit creates an immutable version with a unique ID, SHA-256 hash, token count, commit message, and UTC timestamp. Versions cannot be modified after creation. They can only be locked, which prevents any further operations on that version.
 
-**Token-Level and Semantic Diffing**
+### Token Diffing
 
-`promptvc diff` supports two modes. Token diff (`--mode token`) shows character and token-level changes between two versions. Semantic diff (`--mode semantic`) parses prompt structure to surface higher-level changes — instruction additions, constraint removals, role changes — that are not apparent from raw text diffs alone.
+Compare token counts between any two versions of a prompt. Useful for cost estimation and understanding how a prompt has grown or shrunk over iterations.
 
-**Run History and Replay**
+### Run System
 
-Every execution is stored. `promptvc log runs` lists all runs for a space with version, timestamp, token usage, and latency. `promptvc replay <run_id>` re-executes a historical run against the same version with the same parameters. Useful for regression testing and incident reproduction.
+Execute any prompt version against a configured provider. The result, including output and token usage, is recorded and stored with the version. This creates a full audit trail of what a prompt produced at any point in time.
 
-**Locking**
+### Apply System
 
-`promptvc lock <space> <version>` marks a version as locked. Locked versions cannot be overwritten or deleted, and a commit to the same space while a lock is active requires explicit confirmation. This prevents accidental drift in prompts that are known to be working in production.
+The apply command is the core feature for prompt-driven code modification. Given a prompt name, version, and target file, it:
 
-**Provider Abstraction**
+1. Loads the raw prompt text for that version.
+2. Reads the target file.
+3. Constructs a structured instruction that asks the LLM to return only a unified diff.
+4. Sends the combined input to the configured provider.
+5. Displays the proposed diff for review.
+6. Applies the diff safely using an internal patch engine, with confirmation required before any write occurs.
 
-Providers are configured per workspace. The execution layer is modular the run system calls a provider interface that is separate from the storage and versioning system. The current implementation ships with a mock provider for local development. OpenAI and Anthropic providers are in active development (see Roadmap).
+The LLM is explicitly instructed not to return full file content, not to include explanations, and not to use markdown. If no changes are needed, it returns `NO_CHANGES` and the tool exits cleanly.
+
+### Diff-Based Patch Engine
+
+An internal diff parser applies unified diffs to file content without any third-party patching library. Lines prefixed with `- ` are removed, lines prefixed with `+ ` are added, and metadata lines (`---`, `+++`, `@@`) are ignored. If a line marked for removal does not exist in the original content, the operation fails with an explicit error rather than silently continuing.
+
+### File Change Tracking
+
+Every successful apply operation is logged to the space's storage record. Each log entry includes the version used, the file path, the full diff, and a UTC timestamp. This creates a complete history of which prompts modified which files and when.
+
+### Changes Command
+
+Retrieve the full file modification history for a prompt space, displayed in reverse chronological order. Each entry shows the timestamp, version, and file path.
+
+### Config System
+
+Provider configuration is stored in `.promptvc/config.json`. The provider name and API key can be set via the CLI and are used as defaults for all subsequent commands. No API key is required unless a provider that needs one is invoked.
+
+### Multi-Provider Support
+
+The provider layer is abstracted behind a protocol. Current implementations:
+
+- **mock** — returns deterministic output, requires no API key, suitable for testing.
+- **openai** — calls the OpenAI API using the configured key.
+
+New providers can be added by implementing the `run(prompt: str) -> dict` interface.
+
+---
+
+## Quick Example
+
+A complete workflow from initialization to file modification:
+
+```bash
+# Initialize the repository
+promptvc init
+
+# Commit a prompt
+promptvc commit refactor-imports \
+  --message "Extract and clean import blocks" \
+  --prompt "Reorganize all imports alphabetically and remove unused ones."
+
+# View the version log
+promptvc log refactor-imports
+
+# Configure the provider
+promptvc config set-provider openai
+promptvc config set-api-key sk-...
+
+# Apply the prompt to a file
+promptvc apply refactor-imports v1 --file src/main.py
+
+# Review the proposed diff in the terminal, then confirm or abort
+
+# View the file change history
+promptvc changes refactor-imports
+```
 
 ---
 
 ## CLI Reference
 
-**`promptvc init`**
+### `promptvc init`
 
-Initialize a new workspace in the current directory.
+Initialize the repository. Creates the `.promptvc/` directory and required storage structure.
+
+---
+
+### `promptvc commit <name> --message <msg> --prompt <text>`
+
+Create a new version of a prompt space. Each commit is immutable and receives an auto-incremented version ID (`v1`, `v2`, etc.).
 
 ```bash
-promptvc init
-promptvc init --provider mock   # specify provider at init time
+promptvc commit summarize --message "Initial version" --prompt "Summarize the following text."
 ```
 
-**`promptvc commit`**
+---
 
-Commit a new version of a prompt to a named space.
+### `promptvc log <name>`
+
+Display all versions for a prompt space, sorted newest to oldest. Shows version ID, message, token count, and timestamp.
 
 ```bash
-promptvc commit <space> "<prompt text>"
-promptvc commit summarizer "Summarize in three sentences." --message "tighten output length constraint"
+promptvc log summarize
 ```
 
-**`promptvc log`**
+---
 
-Display version history for a space.
+### `promptvc diff <name> <v1> <v2>`
+
+Show the token count difference between two versions.
 
 ```bash
-promptvc log <space>
-promptvc log summarizer
-promptvc log summarizer --runs   # include run history
+promptvc diff summarize v1 v3
 ```
 
-**`promptvc diff`**
+---
 
-Compare two versions of a prompt.
+### `promptvc run <name> <version>`
+
+Execute a specific prompt version using the configured provider. Records the output and token usage.
 
 ```bash
-promptvc diff <space> <v1> <v2>
-promptvc diff summarizer v1 v2
-promptvc diff summarizer v1 v2 --mode semantic
+promptvc run summarize v2
 ```
 
-**`promptvc run`**
+---
 
-Execute the current (or a specific) version of a prompt.
+### `promptvc config set-provider <provider>`
+
+Set the default provider. Stored in `.promptvc/config.json`.
 
 ```bash
-promptvc run <space>
-promptvc run summarizer --input "text to summarize"
-promptvc run summarizer --version v1 --input "text to summarize"
-promptvc run summarizer --params temperature=0.2,max_tokens=300
+promptvc config set-provider openai
 ```
 
-**`promptvc replay`**
+---
 
-Re-execute a stored run using its exact original parameters.
+### `promptvc config set-api-key <key>`
+
+Set the API key for the configured provider.
 
 ```bash
-promptvc replay <run_id>
-promptvc replay run_00042
+promptvc config set-api-key sk-...
 ```
 
-**`promptvc lock`**
+---
 
-Lock a specific version against modification.
+### `promptvc apply <name> <version> --file <path>`
+
+Apply a prompt version to a file using the configured provider. The LLM returns a unified diff. The diff is displayed for review, and changes are applied only after explicit confirmation.
 
 ```bash
-promptvc lock <space> <version>
-promptvc lock summarizer v2
-promptvc unlock summarizer v2   # remove lock
+promptvc apply refactor-imports v2 --file src/utils.py
+```
+
+---
+
+### `promptvc changes <name>`
+
+Display the file modification history for a prompt space, most recent first.
+
+```bash
+promptvc changes refactor-imports
+```
+
+---
+
+### `promptvc lock <name> <version>`
+
+Lock a version to prevent further operations on it.
+
+```bash
+promptvc lock summarize v1
 ```
 
 ---
 
 ## Architecture
 
-promptvc is structured around three independent layers.
+```
+promptvc/
+  cli/
+    commands/         # One file per command
+  core/
+    repo.py           # Main interface: versioning, execution, tracking
+    storage.py        # Storage engine: read/write space files
+    tokenizer.py      # Token counting
+    lock.py           # Lock guard logic
+  providers/
+    mock.py           # Deterministic test provider
+    openai.py         # OpenAI API provider
+  utils/
+    config.py         # Config file read/write
+    diff_apply.py     # Unified diff parser and patch engine
+```
 
-**Storage layer** reads and writes the `.promptvc/` directory. All persistence operations go through this layer. The format is plain JSON, readable without tooling, and structured to be committed to source control. The storage layer has no network dependencies.
+### Storage Layer
 
-**Version layer** sits on top of storage and handles the semantics of spaces, commits, immutability, and locking. It enforces the constraint that versions are append-only and maintains the ordered history within each space.
+Reads and writes JSON space files under `.promptvc/spaces/`. Each space contains versions, run history, and file change records.
 
-**Execution layer** handles prompt runs. It constructs requests, dispatches to a configured provider, records the full request/response cycle, and writes the run record to storage. The provider interface is a single abstract class with one required method (`complete`). Adding a new provider requires implementing that interface and registering it in the config.
+### Version Layer
 
-The CLI is a thin wrapper over these three layers. Each command maps to a single operation in one layer. There is no global state between commands.
+Managed by `PromptRepo`. Handles commit, retrieval, locking, and log operations. All version IDs are auto-incremented and normalized.
+
+### Execution Layer
+
+The `run` method in `PromptRepo` retrieves a prompt, sends it to the provider, validates the result, records the run, and returns the output.
+
+### Provider Layer
+
+Providers implement a single method: `run(prompt: str) -> dict`. The dict must contain an `output` key. Additional fields (`tokens`, `model`, `latency_ms`) are supported for future use.
+
+### Patch and Diff Engine
+
+`apply_unified_diff(original, diff)` in `promptvc/utils/diff_apply.py` parses a unified diff string and applies it to a string of file content. No external libraries. Strict validation: any removal line that does not match the original raises a `ValueError`.
+
+---
+
+## Storage Model
+
+Each prompt space is stored as a single JSON file:
+
+```json
+{
+  "versions": {
+    "v1": {
+      "id": "v1",
+      "prompt": "Reorganize all imports alphabetically.",
+      "message": "Initial version",
+      "timestamp": "2026-01-01T10:00:00+00:00",
+      "tokens": 42,
+      "locked": false,
+      "hash": "a3f5..."
+    }
+  },
+  "latest": "v1",
+  "runs": [
+    {
+      "version": "v1",
+      "output": "...",
+      "tokens": 310,
+      "timestamp": "2026-01-01T10:05:00+00:00"
+    }
+  ],
+  "file_changes": [
+    {
+      "version": "v1",
+      "file": "src/main.py",
+      "diff": "--- src/main.py\n+++ src/main.py\n@@\n- import os, sys\n+ import os\n+ import sys",
+      "timestamp": "2026-01-01T10:10:00+00:00"
+    }
+  ]
+}
+```
 
 ---
 
 ## Use Cases
 
-**AI product teams managing prompt stability across releases**
+### Prompt-Driven Development
 
-When a prompt is coupled to a product feature, changes to that prompt are changes to product behavior. Using promptvc, teams can lock prompts at a known-good version prior to a release, track any changes made during the release cycle, and diff the committed version against what is currently in source if behavior diverges.
+Use versioned prompts as first-class tools in a development workflow. Commit a refactoring instruction, apply it across files, review the diffs, and log every change. The prompt that produced the change is always traceable.
 
-**Prompt iteration with a structured baseline**
+### Automated Code Modification
 
-Rather than editing a prompt string in-place and re-testing manually, commit each candidate as a new version. Run both versions against the same inputs. Compare outputs and token counts. The version you discard is still in history if you need to return to it.
+Combine `promptvc apply` with a scripting layer to apply prompt-driven transformations across multiple files or repositories. The confirmation step can be bypassed in automated pipelines where output has already been reviewed.
 
-**Debugging production output regressions**
+### Audit and Traceability
 
-When a model output issue is reported, `promptvc log` shows exactly what prompt version was active and when it was committed. If the run was executed through promptvc, `promptvc replay` reproduces the exact request — same prompt version, same parameters — without reconstructing it from memory or logs.
+Every file modification made via `apply` is stored with its version reference, diff, and timestamp. When a question arises about why a file changed, the change log provides a complete answer without relying on Git blame or commit messages written by a human.
 
-**Cost and token usage tracking per prompt version**
+### Reproducible Prompt Testing
 
-Token counts are recorded at commit time and at run time. As you iterate on a prompt, you can see whether a revision shortened or lengthened the prompt and what effect that had on completion token usage across runs.
+Run the same prompt version against the same input multiple times and compare outputs. All run records are stored, making it possible to detect drift in provider behavior over time.
 
 ---
 
 ## Roadmap
 
-The following capabilities are planned or in active development:
-
-**Evaluation system.** Run a prompt version against a fixed test set and score outputs against defined criteria. Store evaluation results per version so you can compare scores across the version history of a space, not just text diffs.
-
-**Provider integrations.** Native support for OpenAI and Anthropic APIs, with provider-specific tokenizer support and model parameter validation at commit time.
-
-**Remote storage backend.** Optional sync to a remote store (S3, GCS, or a hosted backend) for team-shared history. The local-first model remains the default; remote sync is opt-in.
-
-**Team workflows.** Prompt review flows modeled on pull requests — propose a version change, require sign-off before the version becomes the production-locked version for a space.
-
-**CI integration.** A `promptvc check` command for use in CI pipelines. Fails if a locked version has been modified, or if a run against a test input produces output that diverges from a stored baseline.
+- **Evaluation system.** Define expected outputs and run automated evaluations against prompt versions to score quality and detect regressions.
+- **SaaS sync.** Push and pull prompt spaces to a remote registry for team sharing and backup.
+- **Team workflows.** Role-based access, version approval flows, and shared change history.
+- **Git integration.** Link prompt commits to Git commits, enabling cross-referenced history between code changes and the prompts that drove them.
+- **Provider expansion.** Add support for Anthropic, Mistral, and local model runners.
 
 ---
 
 ## Installation
 
-Requires Python 3.10 or later.
-
 ```bash
-pip install promptvc
-```
-
-To install from source:
-
-```bash
-git clone https://github.com/uayushdubey/promptvc
-cd promptvc
+git clone https://github.com/uayushdubey/prompt-version-control
+cd prompt-version-control
 pip install -e .
 ```
 
-Verify the installation:
-
-```bash
-promptvc --version
-```
+Requires Python 3.9 or later. No external dependencies are required for the core system. The OpenAI provider requires the `openai` package.
 
 ---
 
-## Contributing
-
-Issues and pull requests are welcome. Before submitting a PR, run the test suite:
-
-```bash
-pytest tests/
-```
-
-The provider interface and storage layer have full unit test coverage. New providers should include tests against the mock backend before targeting a live API.
-
----
-
-## License
-
-MIT. See [LICENSE](./LICENSE) for details.
-
----
-
-Prompts are not configuration. They are logic. They deserve the same operational discipline as any other artifact you ship.
+Prompts are not configuration. They are not strings to be tuned and forgotten. They are logic — versioned, executable, and auditable — and they deserve the same engineering discipline as the systems they power.
