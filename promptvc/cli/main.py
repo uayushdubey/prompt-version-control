@@ -5,6 +5,7 @@ import sys
 from typing import Callable, Dict
 
 from promptvc.cli.commands.commit import handle as commit_handler
+from promptvc.cli.commands.config import config_command
 from promptvc.cli.commands.diff import handle as diff_handler
 from promptvc.cli.commands.get import handle as get_handler
 from promptvc.cli.commands.list import handle as list_handler
@@ -74,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Provider to use for execution (default: mock)",
     )
 
+    # config
+    config_p = subparsers.add_parser("config", help="Set configuration values")
+    config_p.add_argument("action", type=str, help="Config action (e.g. set-provider, set-api-key)")
+    config_p.add_argument("value", type=str, help="Value to set")
+
     return parser
 
 
@@ -95,6 +101,7 @@ def _build_handler_map() -> Dict[str, Handler]:
         "lock":   lock_handler,
         "list":   list_handler,
         "run":    run_command,
+        "config": config_command,
     }
 
 
