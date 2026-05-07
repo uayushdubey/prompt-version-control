@@ -193,6 +193,42 @@ class PromptRepo:
 
         return self.storage.get_version(name, latest_id)
 
+    #Helpers
+
+    def log_file_change(
+            self,
+            name: str,
+            version: str,
+            file_path: str,
+            diff: str,
+    ) -> None:
+        """
+        Log a file change triggered by a prompt version.
+
+        Stores:
+        - version
+        - file path
+        - diff
+        - timestamp
+        """
+        name = self._normalize_name(name)
+        version = self._normalize_version(version)
+
+        space = self.storage.load_space(name)
+
+        record = {
+            "version": version,
+            "file": file_path,
+            "diff": diff,
+            "timestamp": self._utc_now_iso(),
+        }
+
+        if "file_changes" not in space:
+            space["file_changes"] = []
+
+        space["file_changes"].append(record)
+
+        self.storage.save_space(name, space)
     # -------------------------
     # Run
     # -------------------------
