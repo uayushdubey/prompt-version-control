@@ -10,10 +10,9 @@ from promptvc.cli.commands.get import handle as get_handler
 from promptvc.cli.commands.list import handle as list_handler
 from promptvc.cli.commands.lock import handle as lock_handler
 from promptvc.cli.commands.log import handle as log_handler
+from promptvc.cli.commands.run import run_command
 from promptvc.core import PromptVCError
 from promptvc.core.repo import PromptRepo
-
-from promptvc.cli.commands.run import run_command
 
 # Type alias for all CLI command handlers
 Handler = Callable[[argparse.Namespace], None]
@@ -32,13 +31,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init", help="Initialize a promptvc repository")
 
     # commit
-    # commit
     commit_p = subparsers.add_parser("commit", help="Commit a new prompt version")
     commit_p.add_argument("name", type=str, help="Prompt space name")
-    commit_p.add_argument("--prompt", type=str, default=None,
-                          help="Prompt text (optional, prompts interactively if omitted)")
-    commit_p.add_argument("--message", type=str, default=None,
-                          help="Commit message (optional, prompts interactively if omitted)")
+    commit_p.add_argument(
+        "--prompt", type=str, default=None,
+        help="Prompt text (optional, prompts interactively if omitted)",
+    )
+    commit_p.add_argument(
+        "--message", type=str, default=None,
+        help="Commit message (optional, prompts interactively if omitted)",
+    )
 
     # log
     log_p = subparsers.add_parser("log", help="Show version history for a space")
@@ -67,23 +69,24 @@ def build_parser() -> argparse.ArgumentParser:
     run_p = subparsers.add_parser("run", help="Run a prompt version")
     run_p.add_argument("name", type=str, help="Prompt space name")
     run_p.add_argument("version", type=str, help="Version ID (e.g. v1)")
+    run_p.add_argument(
+        "--provider", type=str, default="mock",
+        help="Provider to use for execution (default: mock)",
+    )
 
     return parser
 
 
 def handle_init(_: argparse.Namespace) -> None:
     """Handle `promptvc init` — initialize the repository."""
-    try:
-        repo = PromptRepo()
-        repo.init_repo()
-        print("✓ Repository initialized.")
-    except PromptVCError as exc:
-        print(f"✗ {exc}")
+    repo = PromptRepo()
+    repo.init_repo()
+    print("✓ Repository initialized.")
 
 
-def _resolve_handler(args: argparse.Namespace) -> Handler:
-    """Return the handler function for the parsed command."""
-    mapping: Dict[str, Handler] = {
+def _build_handler_map() -> Dict[str, Handler]:
+    """Return the command → handler mapping."""
+    return {
         "init":   handle_init,
         "commit": commit_handler,
         "log":    log_handler,
@@ -91,9 +94,18 @@ def _resolve_handler(args: argparse.Namespace) -> Handler:
         "diff":   diff_handler,
         "lock":   lock_handler,
         "list":   list_handler,
-        "run": run_command,
+        "run":    run_command,
     }
-    return mapping[args.command]
+
+
+def _resolve_handler(command: str) -> Handler:
+    """
+    Return the handler for the given command name.
+
+    Raises:
+        KeyError: If the command is not registered.
+    """
+    return _build_handler_map()[command]
 
 
 def main() -> None:
@@ -102,12 +114,20 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        handler = _resolve_handler(args)
+        handler = _resolve_handler(args.command)
+        handler(args)
     except KeyError:
         print(f"✗ Unknown command: '{args.command}'")
         sys.exit(1)
-
-    handler(args)
+    except PromptVCError as exc:
+        print(f"✗ {exc}")
+        sys.exit(1)
+    except ValueError as exc:
+        print(f"✗ Validation error: {exc}")
+        sys.exit(1)
+    except Exception as exc:
+        print(f"✗ Unexpected error: {exc}")
+        sys.exit(2)
 
 
 if __name__ == "__main__":
