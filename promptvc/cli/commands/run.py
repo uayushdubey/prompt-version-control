@@ -7,10 +7,10 @@ from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
 from promptvc.utils.config import get_config_value
 
-# Provider registry — add new providers here as they become available
+# Provider registry — store classes, not instances
 _PROVIDER_REGISTRY = {
-    "mock": MockProvider(),
-    "openai": OpenAIProvider(),
+    "mock": MockProvider,
+    "openai": OpenAIProvider,
 }
 
 
@@ -21,13 +21,15 @@ def _resolve_provider(name: str):
     Raises:
         ValueError: If the provider is not registered.
     """
-    provider = _PROVIDER_REGISTRY.get(name)
-    if provider is None:
+    provider_cls = _PROVIDER_REGISTRY.get(name)
+    if provider_cls is None:
         available = ", ".join(f"'{k}'" for k in _PROVIDER_REGISTRY)
         raise ValueError(
             f"Provider '{name}' not found. Available providers: {available}"
         )
-    return provider
+
+    # Instantiate lazily (fixes API key issue)
+    return provider_cls()
 
 
 def run_command(args: argparse.Namespace) -> None:
@@ -36,6 +38,7 @@ def run_command(args: argparse.Namespace) -> None:
         or get_config_value("provider")
         or "mock"
     )
+
     provider = _resolve_provider(provider_name)
 
     repo = PromptRepo()
@@ -49,5 +52,6 @@ def run_command(args: argparse.Namespace) -> None:
 
     print(f"\n✓ Ran {args.name}@{args.version}")
     print(f"\nOutput:\n{output}")
+
     if tokens is not None:
         print(f"\nTokens: {tokens}")

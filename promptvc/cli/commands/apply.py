@@ -7,20 +7,23 @@ from promptvc.providers.openai import OpenAIProvider
 from promptvc.utils.config import get_config_value
 from promptvc.utils.diff_apply import apply_unified_diff
 
+# Store classes, NOT instances
 _PROVIDER_REGISTRY = {
-    "mock": MockProvider(),
-    "openai": OpenAIProvider(),
+    "mock": MockProvider,
+    "openai": OpenAIProvider,
 }
 
 
 def _resolve_provider(name: str):
-    provider = _PROVIDER_REGISTRY.get(name)
-    if provider is None:
+    provider_cls = _PROVIDER_REGISTRY.get(name)
+    if provider_cls is None:
         available = ", ".join(f"'{k}'" for k in _PROVIDER_REGISTRY)
         raise ValueError(
             f"Provider '{name}' not found. Available providers: {available}"
         )
-    return provider
+
+    # Lazy instantiation (fixes API key crash)
+    return provider_cls()
 
 
 def apply_command(args: argparse.Namespace) -> None:
@@ -29,6 +32,7 @@ def apply_command(args: argparse.Namespace) -> None:
         or get_config_value("provider")
         or "mock"
     )
+
     provider = _resolve_provider(provider_name)
 
     repo = PromptRepo()
@@ -79,6 +83,11 @@ NO_CHANGES
 
     if output.strip() == "NO_CHANGES":
         print("✓ No changes required.")
+        return
+
+    # Optional safety check (recommended)
+    if not output.strip().startswith("---"):
+        print("✗ Invalid diff format received.")
         return
 
     print("\n--- Proposed changes ---")
