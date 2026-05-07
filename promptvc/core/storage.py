@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -43,7 +45,14 @@ class VersionData(TypedDict):
 
 class PromptSpace(TypedDict):
     versions: Dict[str, VersionData]
-    latest: Optional[str]  # Empty string or None before first commit
+    latest: Optional[str]
+
+
+class RunRecord(TypedDict):
+    version: str
+    output: str
+    tokens: Optional[int]
+    timestamp: str
 
 
 # =========================
@@ -95,12 +104,54 @@ class StorageEngine:
                 "Only alphanumeric characters, hyphens, and underscores are allowed."
             )
 
+    def _validate_space_structure(self, name: str, data: object) -> PromptSpace:
+        """
+        Validate that loaded JSON conforms to the expected PromptSpace structure.
+
+        Raises:
+            PromptVCError: If required fields are missing or have wrong types.
+        """
+        if not isinstance(data, dict):
+            raise PromptVCError(
+                f"Corrupted data in prompt space '{name}': "
+                "expected a JSON object at the top level."
+            )
+
+        versions = data.get("versions")
+        if not isinstance(versions, dict):
+            raise PromptVCError(
+                f"Corrupted data in prompt space '{name}': "
+                "'versions' must be a dict."
+            )
+
+        latest = data.get("latest")
+        if latest is not None and not isinstance(latest, str):
+            raise PromptVCError(
+                f"Corrupted data in prompt space '{name}': "
+                "'latest' must be a string or null."
+            )
+
+        return data  # type: ignore[return-value]
+
     def _space_path(self, name: str) -> Path:
         return self._root / f"{name}.json"
 
     # -------------------------
+    # Internal Hooks (extensibility points)
+    # -------------------------
+
+    def _on_space_loaded(self, name: str, data: PromptSpace) -> None:
+        """Called after a space is successfully loaded from disk. Reserved for future use."""
+        pass
+
+    def _on_space_saved(self, name: str, data: PromptSpace) -> None:
+        """Called after a space is successfully persisted to disk. Reserved for future use."""
+        pass
+
+    # -------------------------
     # Cache
     # -------------------------
+
     def invalidate_cache(self, name: Optional[str] = None) -> None:
         """
         Invalidate cache for a specific space, or all spaces if name is None.
@@ -122,14 +173,11 @@ class StorageEngine:
 
         Raises:
             PromptSpaceNotFoundError: If no file exists for this space.
-            PromptVCError: If stored JSON is corrupted.
+            PromptVCError: If stored JSON is corrupted or structurally invalid.
         """
-        import copy
-
         self._ensure_initialized()
         self._validate_name(name)
 
-        # Return from cache (safe copy)
         if name in self._cache:
             return copy.deepcopy(self._cache[name])
 
@@ -142,14 +190,17 @@ class StorageEngine:
 
         try:
             with file_path.open("r", encoding="utf-8") as f:
-                data: PromptSpace = json.load(f)
+                raw: object = json.load(f)
         except json.JSONDecodeError as e:
             raise PromptVCError(
-                f"Corrupted data in prompt space '{name}'."
+                f"Failed to parse prompt space '{name}': JSON is malformed."
             ) from e
 
-        # Store safe copy in cache
-        self._cache[name] = data
+        data = self._validate_space_structure(name, raw)
+
+        self._cache[name] = copy.deepcopy(data)
+
+        self._on_space_loaded(name, data)
 
         return copy.deepcopy(data)
 
@@ -162,9 +213,6 @@ class StorageEngine:
         Raises:
             PromptVCError: If persistence fails.
         """
-        import copy
-        import os
-
         self._ensure_initialized()
         self._validate_name(name)
 
@@ -172,38 +220,36 @@ class StorageEngine:
         temp_path: Optional[Path] = None
 
         try:
-            # Ensure directory exists (handles deletion mid-run)
             self._root.mkdir(parents=True, exist_ok=True)
 
             with tempfile.NamedTemporaryFile(
-                    mode="w",
-                    delete=False,
-                    dir=self._root,
-                    suffix=".tmp",
-                    encoding="utf-8",
+                mode="w",
+                delete=False,
+                dir=self._root,
+                suffix=".tmp",
+                encoding="utf-8",
             ) as tmp:
                 json.dump(data, tmp, indent=2)
                 tmp.flush()
                 os.fsync(tmp.fileno())
                 temp_path = Path(tmp.name)
 
-            # Atomic replace
             temp_path.replace(file_path)
 
         except Exception as e:
-            # Cleanup temp file if it exists
             if temp_path and temp_path.exists():
                 try:
                     temp_path.unlink()
                 except Exception:
-                    pass  # best-effort cleanup
+                    pass
 
             raise PromptVCError(
-                f"Failed to persist prompt space '{name}'."
+                f"Failed to persist prompt space '{name}': {e}"
             ) from e
 
-        # Update cache only after successful write
         self._cache[name] = copy.deepcopy(data)
+
+        self._on_space_saved(name, data)
 
     def load_or_create_space(self, name: str) -> PromptSpace:
         """
@@ -217,6 +263,7 @@ class StorageEngine:
         except PromptSpaceNotFoundError:
             return {"versions": {}, "latest": None}
 
+    # -------------------------
     # Version Access
     # -------------------------
 
@@ -231,20 +278,43 @@ class StorageEngine:
 
         if version not in space["versions"]:
             raise VersionNotFoundError(
-                f"Version '{version}' not found in space '{name}'."
+                f"Version '{version}' not found in space '{name}'. "
+                "Use `log` to list available versions."
             )
 
         return space["versions"][version]
 
-    def append_run(self, name: str, run_data: dict) -> None:
+    def append_run(self, name: str, run_data: RunRecord) -> None:
         """
         Append a run record to a prompt space.
 
+        Validates required fields before appending.
         Ensures backward compatibility by creating 'runs' if missing.
+
+        Raises:
+            ValueError: If required fields are missing from run_data.
+            PromptVCError: If the space cannot be loaded or saved.
         """
+        version = run_data.get("version")  # type: ignore[typeddict-item]
+        if not version:
+            raise ValueError(
+                f"run_data for space '{name}' must include a non-empty 'version' field."
+            )
+
+        output = run_data.get("output")  # type: ignore[typeddict-item]
+        if output is None:
+            raise ValueError(
+                f"run_data for space '{name}' must include an 'output' field."
+            )
+
         space = self.load_space(name)
 
-        runs = space.setdefault("runs", [])
+        runs: list = space.setdefault("runs", [])  # type: ignore[typeddict-unknown-key]
+        if not isinstance(runs, list):
+            raise PromptVCError(
+                f"Corrupted 'runs' field in prompt space '{name}': expected a list."
+            )
+
         runs.append(run_data)
 
         self.save_space(name, space)
