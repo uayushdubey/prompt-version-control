@@ -25,6 +25,7 @@ def handle(args: argparse.Namespace) -> None:
 
     result = repo.commit(name, prompt, message)
     print(f"\n✓ Committed {result['id']}  [{result['tokens']} tokens]")
+    print(f"Message: {result['message']}")
 
 
 def _resolve(field: str, value: str | None, prompt_label: str) -> str | None:
@@ -44,7 +45,7 @@ def _read_input(field: str, prompt_label: str) -> str | None:
 
     Returns None on empty input, EOF, or keyboard interrupt.
     """
-    print(f"\n{prompt_label}\n")
+    print(f"\n{prompt_label}")
     try:
         value = input("> ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -52,7 +53,7 @@ def _read_input(field: str, prompt_label: str) -> str | None:
         return None
 
     if not value:
-        print(f"✗ {field} cannot be empty.")
+        print(f"✗ {field} cannot be empty. Please try again.")
         return None
 
     return value

@@ -12,6 +12,7 @@ from promptvc.cli.commands.list import handle as list_handler
 from promptvc.cli.commands.lock import handle as lock_handler
 from promptvc.cli.commands.log import handle as log_handler
 from promptvc.cli.commands.run import run_command
+from promptvc.cli.commands.changes import changes_command  # NEW
 from promptvc.core import PromptVCError
 from promptvc.core.repo import PromptRepo
 
@@ -77,8 +78,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     # config
     config_p = subparsers.add_parser("config", help="Set configuration values")
-    config_p.add_argument("action", type=str, help="Config action (e.g. set-provider, set-api-key)")
-    config_p.add_argument("value", type=str, help="Value to set")
+    config_p.add_argument(
+        "action",
+        type=str,
+        help="Config action (e.g. set-provider, set-api-key)",
+    )
+    config_p.add_argument(
+        "value",
+        type=str,
+        help="Value to set",
+    )
+
+    # changes (NEW)
+    changes_p = subparsers.add_parser(
+        "changes",
+        help="Show file change history",
+    )
+    changes_p.add_argument(
+        "name",
+        type=str,
+        help="Prompt space name",
+    )
 
     return parser
 
@@ -93,15 +113,16 @@ def handle_init(_: argparse.Namespace) -> None:
 def _build_handler_map() -> Dict[str, Handler]:
     """Return the command → handler mapping."""
     return {
-        "init":   handle_init,
+        "init": handle_init,
         "commit": commit_handler,
-        "log":    log_handler,
-        "get":    get_handler,
-        "diff":   diff_handler,
-        "lock":   lock_handler,
-        "list":   list_handler,
-        "run":    run_command,
+        "log": log_handler,
+        "get": get_handler,
+        "diff": diff_handler,
+        "lock": lock_handler,
+        "list": list_handler,
+        "run": run_command,
         "config": config_command,
+        "changes": changes_command,  # NEW
     }
 
 
@@ -138,4 +159,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main() 
+    main()
