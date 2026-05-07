@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from promptvc.core.storage import (
     StorageEngine,
@@ -10,6 +10,14 @@ from promptvc.core.storage import (
 )
 from promptvc.core.lock import LockGuard
 from promptvc.core.tokenizer import Tokenizer
+
+
+@runtime_checkable
+class Provider(Protocol):
+    """Protocol for prompt execution providers."""
+
+    def run(self, prompt: str) -> Dict[str, Any]:
+        ...
 
 
 class PromptRepo:
@@ -38,18 +46,46 @@ class PromptRepo:
         self.storage.initialize()
 
     # -------------------------
-    # Commit
+    # Internal Hooks (extensibility points)
     # -------------------------
+
+    def _on_commit(self, version_data: Dict[str, Any]) -> None:
+        """Called after a successful commit. Reserved for future analytics/logging."""
+        pass
+
+    def _on_run(self, run_record: Dict[str, Any]) -> None:
+        """Called after a successful run. Reserved for future analytics/logging."""
+        pass
+
+    # -------------------------
+    # Normalization & Validation
+    # -------------------------
+
+    def _normalize_name(self, name: str) -> str:
+        if not name or not name.strip():
+            raise ValueError("name must be a non-empty string.")
+        return name.strip().lower()
+
+    def _normalize_version(self, version: str) -> str:
+        if not version or not version.strip():
+            raise ValueError("version must be a non-empty string.")
+        return version.strip().lower()
 
     def _validate_non_empty(self, **kwargs: str) -> None:
         for field, value in kwargs.items():
             if value is None or not value.strip():
                 raise ValueError(f"{field} must be a non-empty string.")
 
-    # Name Normalization
+    def _validate_provider(self, provider: Any) -> None:
+        """Ensure provider conforms to the Provider protocol."""
+        if not isinstance(provider, Provider):
+            raise TypeError(
+                "provider must implement a `run(prompt: str) -> dict` method."
+            )
 
-    def _normalize_name(self, name: str) -> str:
-        return name.strip().lower()
+    # -------------------------
+    # Commit
+    # -------------------------
 
     def _build_version(self, version_id: str, prompt: str, message: str) -> Dict[str, Any]:
         return {
@@ -72,32 +108,27 @@ class PromptRepo:
         Raises:
             ValueError: If inputs are invalid.
         """
-        # Validate inputs
         self._validate_non_empty(name=name, prompt=prompt, message=message)
 
-        # Normalize inputs
         name = self._normalize_name(name)
         prompt = prompt.strip()
         message = message.strip()
 
-        # Load or create prompt space
         space = self.storage.load_or_create_space(name)
-
-        # Generate next version ID
         version_id = self.storage.next_version_id(space)
 
-        # Build version data
         version_data = self._build_version(
             version_id=version_id,
             prompt=prompt,
             message=message,
         )
 
-        # Persist
         space["versions"][version_id] = version_data
         space["latest"] = version_id
 
         self.storage.save_space(name, space)
+
+        self._on_commit(version_data)
 
         return version_data
 
@@ -107,17 +138,13 @@ class PromptRepo:
 
     def log(self, name: str) -> List[Dict[str, Any]]:
         """Return all versions for a space, sorted latest → oldest."""
+        name = self._normalize_name(name)
         space = self.storage.load_space(name)
         return self._sort_versions_desc(list(space["versions"].values()))
 
     # -------------------------
     # Getters
     # -------------------------
-
-    def _normalize_version(self, version: str) -> str:
-        if not version or not version.strip():
-            raise ValueError("version must be a non-empty string.")
-        return version.strip().lower()
 
     def get(self, name: str, version: str) -> str:
         """
@@ -167,31 +194,62 @@ class PromptRepo:
         return self.storage.get_version(name, latest_id)
 
     # -------------------------
-    #Run
+    # Run
     # -------------------------
 
-    def run(self, name: str, version: str, provider) -> dict:
+    def _build_run_record(
+        self,
+        version: str,
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Build a run record from a provider result.
+
+        Structured to accommodate future fields (latency, cost, model, etc.)
+        without breaking existing callers.
+        """
+        return {
+            "version": version,
+            "output": result.get("output"),
+            "tokens": result.get("tokens"),
+            "timestamp": self._utc_now_iso(),
+            # Future fields can be added here:
+            # "latency_ms": result.get("latency_ms"),
+            # "cost": result.get("cost"),
+            # "model": result.get("model"),
+        }
+
+    def run(self, name: str, version: str, provider: Any) -> Dict[str, Any]:
+        """
+        Execute a prompt version using a provider and record the result.
+
+        Raises:
+            TypeError: If provider does not implement the Provider protocol.
+            ValueError: If inputs are invalid or provider output is missing.
+            VersionNotFoundError: If version does not exist.
+        """
+        self._validate_provider(provider)
+
         name = self._normalize_name(name)
         version = self._normalize_version(version)
 
         prompt = self.get(name, version)
         result = provider.run(prompt)
 
+        if not isinstance(result, dict):
+            raise ValueError("Provider must return a dict.")
+
         output = result.get("output")
         if output is None:
             raise ValueError("Provider must return 'output'.")
 
-        run_record = {
-            "version": version,
-            "output": output,
-            "tokens": result.get("tokens"),
-            "timestamp": self._utc_now_iso(),
-        }
+        run_record = self._build_run_record(version=version, result=result)
 
         self.storage.append_run(name, run_record)
 
-        return result
+        self._on_run(run_record)
 
+        return result
 
     # -------------------------
     # List
@@ -217,16 +275,12 @@ class PromptRepo:
         name = self._normalize_name(name)
         version = self._normalize_version(version)
 
-        # Fetch version (delegates existence check to storage)
         version_data = self.storage.get_version(name, version)
 
-        # Ensure it's not already locked
         self.lock_guard.assert_not_already_locked(version_data, name, version)
 
-        # Apply lock
         updated_version = self.lock_guard.apply_lock(version_data)
 
-        # Persist
         space = self.storage.load_space(name)
         space["versions"][version] = updated_version
         self.storage.save_space(name, space)
@@ -241,6 +295,7 @@ class PromptRepo:
 
         Positive → v2 is longer; negative → v2 is shorter.
         """
+        name = self._normalize_name(name)
         version1 = self.storage.get_version(name, v1.lower())
         version2 = self.storage.get_version(name, v2.lower())
         return version2["tokens"] - version1["tokens"]
