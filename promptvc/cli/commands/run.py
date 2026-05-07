@@ -4,10 +4,13 @@ import argparse
 
 from promptvc.core.repo import PromptRepo
 from promptvc.providers.mock import MockProvider
+from promptvc.providers.openai import OpenAIProvider
+from promptvc.utils.config import get_config_value
 
 # Provider registry — add new providers here as they become available
 _PROVIDER_REGISTRY = {
     "mock": MockProvider(),
+    "openai": OpenAIProvider(),
 }
 
 
@@ -28,7 +31,11 @@ def _resolve_provider(name: str):
 
 
 def run_command(args: argparse.Namespace) -> None:
-    provider_name = getattr(args, "provider", None) or "mock"
+    provider_name = (
+        getattr(args, "provider", None)
+        or get_config_value("provider")
+        or "mock"
+    )
     provider = _resolve_provider(provider_name)
 
     repo = PromptRepo()
