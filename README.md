@@ -4,7 +4,7 @@
 
 ---
 
-promptvc is a Python CLI tool that brings version control and reproducibility to LLM prompts. It tracks prompt changes, diffs versions at the token and semantic level, executes prompts against configured providers, and replays exact historical runs — giving you a verifiable record of what ran, when, and what it returned.
+promptvc is a Python CLI tool that brings version control and reproducibility to LLM prompts. It tracks prompt changes, diffs versions at the token and semantic level, executes prompts against configured providers, and replays exact historical runs giving you a verifiable record of what ran, when, and what it returned.
 
 ---
 
@@ -17,7 +17,7 @@ This results in real operational problems:
 - A prompt gets tweaked during debugging and committed with the rest of a feature diff. A week later, output quality degrades. No one remembers what changed.
 - Token counts shift across iterations, pushing requests over context limits or inflating inference costs, with no per-version record to compare against.
 - Two engineers are iterating on the same prompt in parallel. One version gets shipped. There is no agreed-upon way to evaluate which performed better.
-- A production issue is traced to model output. Reproducing the exact run — the exact prompt text, model version, and parameters — is not possible because that state was never captured.
+- A production issue is traced to model output. Reproducing the exact run the exact prompt text, model version, and parameters is not possible because that state was never captured.
 
 The core issue is not that prompts are hard to write. It is that they are treated as configuration managed with none of the rigor applied to code.
 
@@ -27,7 +27,7 @@ The core issue is not that prompts are hard to write. It is that they are treate
 
 promptvc models prompts as first-class versioned artifacts. Each time you commit a prompt, promptvc records the full text, a SHA-256 hash, a token count, and a timestamp. Versions are immutable. Once committed, a version cannot be overwritten — only superseded by a new one. This gives you a reliable history you can audit, compare, and return to.
 
-The diff system operates at two levels. Token-level diffs show exactly which tokens were added or removed between two versions. Semantic diffs surface structural changes — shifts in instruction framing, role assignments, or output constraints — that token diffs can obscure. When you are iterating toward a target behavior, being able to state precisely what changed is the difference between deliberate engineering and guesswork.
+The diff system operates at two levels. Token-level diffs show exactly which tokens were added or removed between two versions. Semantic diffs surface structural changes shifts in instruction framing, role assignments, or output constraints that token diffs can obscure. When you are iterating toward a target behavior, being able to state precisely what changed is the difference between deliberate engineering and guesswork.
 
 The run system executes prompts against a configured provider, records the full request and response, and stores the run against its prompt version. Every run is replayable. If you need to reproduce what happened on a specific version at a specific point in time, you can — without relying on memory or reconstructed state.
 
@@ -86,7 +86,7 @@ Output:
 
 **Prompt Spaces**
 
-A prompt space is a named container for a single logical prompt and all its versions. Spaces map to discrete functions in your application — a classifier, a summarizer, an extraction prompt, a system message — and keep version history scoped and searchable. A space named `invoice-extractor` holds only the versions and runs for that prompt.
+A prompt space is a named container for a single logical prompt and all its versions. Spaces map to discrete functions in your application a classifier, a summarizer, an extraction prompt, a system message and keep version history scoped and searchable. A space named `invoice-extractor` holds only the versions and runs for that prompt.
 
 **Versions**
 
@@ -139,7 +139,7 @@ Every execution is stored. `promptvc log runs` lists all runs for a space with v
 
 **Provider Abstraction**
 
-Providers are configured per workspace. The execution layer is modular — the run system calls a provider interface that is separate from the storage and versioning system. The current implementation ships with a mock provider for local development. OpenAI and Anthropic providers are in active development (see Roadmap).
+Providers are configured per workspace. The execution layer is modular the run system calls a provider interface that is separate from the storage and versioning system. The current implementation ships with a mock provider for local development. OpenAI and Anthropic providers are in active development (see Roadmap).
 
 ---
 
@@ -276,7 +276,7 @@ pip install promptvc
 To install from source:
 
 ```bash
-git clone https://github.com/your-org/promptvc
+git clone https://github.com/uayushdubey/promptvc
 cd promptvc
 pip install -e .
 ```
