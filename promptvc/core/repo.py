@@ -229,6 +229,7 @@ class PromptRepo:
         space["file_changes"].append(record)
 
         self.storage.save_space(name, space)
+
     # -------------------------
     # Run
     # -------------------------

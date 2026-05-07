@@ -5,7 +5,7 @@ from promptvc.core.repo import PromptRepo
 from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
 from promptvc.utils.config import get_config_value
-from promptvc.utils.diff_apply import apply_unified_diff  # NEW
+from promptvc.utils.diff_apply import apply_unified_diff
 
 _PROVIDER_REGISTRY = {
     "mock": MockProvider(),
@@ -98,6 +98,13 @@ NO_CHANGES
                 f.write(new_content)
         except OSError as e:
             raise RuntimeError(f"Failed to write file '{args.file}': {e}") from e
+
+        repo.log_file_change(
+            name=args.name,
+            version=args.version,
+            file_path=args.file,
+            diff=output,
+        )
 
         print(f"✓ Changes applied to '{args.file}'")
 
