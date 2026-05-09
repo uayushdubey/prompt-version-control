@@ -12,8 +12,10 @@ from promptvc.cli.commands.list import handle as list_handler
 from promptvc.cli.commands.lock import handle as lock_handler
 from promptvc.cli.commands.log import handle as log_handler
 from promptvc.cli.commands.run import run_command
-from promptvc.cli.commands.changes import changes_command  # NEW
+from promptvc.cli.commands.changes import changes_command
 from promptvc.cli.commands.eval import eval_command
+from promptvc.cli.commands.compare import compare_command  # NEW
+
 from promptvc.core import PromptVCError
 from promptvc.core.repo import PromptRepo
 
@@ -90,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Value to set",
     )
 
-    # changes (NEW)
+    # changes
     changes_p = subparsers.add_parser(
         "changes",
         help="Show file change history",
@@ -107,6 +109,14 @@ def build_parser() -> argparse.ArgumentParser:
     eval_p.add_argument("version", type=str, help="Version ID (e.g. v1)")
     eval_p.add_argument("--dataset", type=str, required=True, help="Path to dataset JSON file")
     eval_p.add_argument("--provider", type=str, default=None, help="Provider to use (optional)")
+
+    # compare (NEW)
+    compare_p = subparsers.add_parser("compare", help="Compare two prompt versions on a dataset")
+    compare_p.add_argument("name", type=str, help="Prompt space name")
+    compare_p.add_argument("v1", type=str, help="First version ID")
+    compare_p.add_argument("v2", type=str, help="Second version ID")
+    compare_p.add_argument("--dataset", type=str, required=True, help="Path to dataset JSON file")
+    compare_p.add_argument("--provider", type=str, default=None, help="Provider to use (optional)")
 
     return parser
 
@@ -130,23 +140,17 @@ def _build_handler_map() -> Dict[str, Handler]:
         "list": list_handler,
         "run": run_command,
         "config": config_command,
-        "changes": changes_command,  # NEW
+        "changes": changes_command,
         "eval": eval_command,
+        "compare": compare_command,  # NEW
     }
 
 
 def _resolve_handler(command: str) -> Handler:
-    """
-    Return the handler for the given command name.
-
-    Raises:
-        KeyError: If the command is not registered.
-    """
     return _build_handler_map()[command]
 
 
 def main() -> None:
-    """CLI entry point."""
     parser = build_parser()
     args = parser.parse_args()
 
