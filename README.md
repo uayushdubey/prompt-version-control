@@ -6,9 +6,9 @@ Git for prompts — a version control system for LLM prompts.
 
 ## What This Project Is
 
-promptvc is a command-line tool for managing, executing, and auditing LLM prompts with the same discipline applied to source code. It treats prompts as versioned artifacts: immutable, traceable, and executable.
+`promptvc` is a command-line tool for managing, executing, and auditing LLM prompts with the same discipline applied to source code. It treats prompts as versioned artifacts: immutable, traceable, and executable.
 
-It is not a prompt playground. It is not a wrapper around an LLM API. It is infrastructure for teams and engineers who need to manage prompts with the same rigor they apply to code.
+It is not a prompt playground. It is not a wrapper around an LLM API. It is infrastructure for engineers and teams who need to manage prompts with the rigor they apply to production code.
 
 ---
 
@@ -24,12 +24,19 @@ This is not sustainable as LLM usage matures.
 
 ## What promptvc Does
 
-promptvc gives prompts the properties that source code has always had:
+`promptvc` gives prompts the properties that source code has always had:
 
-- **Versioning.** Every prompt is stored as an immutable, timestamped version. Commits are explicit and require a message.
-- **Execution.** Prompts can be run against a configured provider. Results are recorded alongside the version that produced them.
-- **Reproducibility.** Any version can be retrieved and re-executed. Run history is preserved per version.
-- **Code modification.** Prompts can be applied to files via an LLM-powered apply pipeline that generates a strict unified diff, requires confirmation, and logs every change made.
+**Versioning.** Every prompt is stored as an immutable, timestamped version. Commits are explicit and require a message.
+
+**Execution.** Prompts can be run against a configured provider. Results are recorded alongside the version that produced them.
+
+**Evaluation.** Prompts can be tested against a structured dataset. Results are collected per case and stored for future comparison.
+
+**Comparison.** Two versions of a prompt can be run against the same dataset and their outputs compared side by side, enabling informed decisions about which version performs better.
+
+**Reproducibility.** Any version can be retrieved and re-executed. Run history and evaluation records are preserved per version.
+
+**Code modification.** Prompts can be applied to files via an LLM-powered apply pipeline that generates a strict unified diff, requires confirmation, and logs every change made.
 
 ---
 
@@ -43,13 +50,34 @@ Every commit creates an immutable version with a unique ID, SHA-256 hash, token 
 
 Compare token counts between any two versions of a prompt. Useful for cost estimation and understanding how a prompt has grown or shrunk over iterations.
 
-### Run System
+### Execution Model
 
-Execute any prompt version against a configured provider. The result, including output and token usage, is recorded and stored with the version. This creates a full audit trail of what a prompt produced at any point in time.
+There are three distinct execution modes:
+
+- **run** — single execution of a prompt version against a provider. Output and token usage are recorded.
+- **eval** — batch execution of a prompt version across a structured dataset. Each input is run independently and all outputs are collected and stored.
+- **compare** — comparative evaluation of two prompt versions against the same dataset. Outputs are displayed side by side at runtime. No storage is written for compare operations.
+
+### Evaluation System
+
+The `eval` command runs a prompt version against a JSON dataset. Each item in the dataset must contain an `input` field. The prompt text is prepended to each input, the provider is called, and the output is collected per case. Results are stored under the `evaluations` key in the space record, enabling repeatable testing and regression detection across versions.
+
+Dataset format:
+
+```json
+[
+  { "input": "Summarize the following paragraph: ..." },
+  { "input": "Summarize the following paragraph: ..." }
+]
+```
+
+### Comparison System
+
+The `compare` command runs two prompt versions against the same dataset and displays outputs side by side. This is a runtime operation — no evaluation records are written. The comparison is intended to inform version selection before committing to an evaluation record.
 
 ### Apply System
 
-The apply command is the core feature for prompt-driven code modification. Given a prompt name, version, and target file, it:
+The `apply` command is the core feature for prompt-driven code modification. Given a prompt name, version, and target file, it:
 
 1. Loads the raw prompt text for that version.
 2. Reads the target file.
@@ -62,15 +90,11 @@ The LLM is explicitly instructed not to return full file content, not to include
 
 ### Diff-Based Patch Engine
 
-An internal diff parser applies unified diffs to file content without any third-party patching library. Lines prefixed with `- ` are removed, lines prefixed with `+ ` are added, and metadata lines (`---`, `+++`, `@@`) are ignored. If a line marked for removal does not exist in the original content, the operation fails with an explicit error rather than silently continuing.
+An internal diff parser applies unified diffs to file content without any third-party patching library. Lines prefixed with `-` are removed, lines prefixed with `+` are added, and metadata lines (`---`, `+++`, `@@`) are ignored. If a line marked for removal does not exist in the original content, the operation fails with an explicit error rather than silently continuing.
 
 ### File Change Tracking
 
-Every successful apply operation is logged to the space's storage record. Each log entry includes the version used, the file path, the full diff, and a UTC timestamp. This creates a complete history of which prompts modified which files and when.
-
-### Changes Command
-
-Retrieve the full file modification history for a prompt space, displayed in reverse chronological order. Each entry shows the timestamp, version, and file path.
+Every successful apply operation is logged to the space's storage record. Each entry includes the version used, the file path, the full diff, and a UTC timestamp. This creates a complete history of which prompts modified which files and when.
 
 ### Config System
 
@@ -80,7 +104,7 @@ Provider configuration is stored in `.promptvc/config.json`. The provider name a
 
 The provider layer is abstracted behind a protocol. Current implementations:
 
-- **mock** — returns deterministic output, requires no API key, suitable for testing.
+- **mock** — returns deterministic output, requires no API key, suitable for testing and local development.
 - **openai** — calls the OpenAI API using the configured key.
 
 New providers can be added by implementing the `run(prompt: str) -> dict` interface.
@@ -89,31 +113,45 @@ New providers can be added by implementing the `run(prompt: str) -> dict` interf
 
 ## Quick Example
 
-A complete workflow from initialization to file modification:
+A complete workflow from initialization to evaluation and file modification:
 
 ```bash
 # Initialize the repository
 promptvc init
 
-# Commit a prompt
-promptvc commit refactor-imports \
-  --message "Extract and clean import blocks" \
-  --prompt "Reorganize all imports alphabetically and remove unused ones."
+# Commit two versions of a prompt
+promptvc commit summarize \
+  --message "Initial summarization prompt" \
+  --prompt "Summarize the following text in two sentences."
 
-# View the version log
-promptvc log refactor-imports
+promptvc commit summarize \
+  --message "More concise summarization" \
+  --prompt "Summarize the following text in one sentence."
+
+# View version history
+promptvc log summarize
 
 # Configure the provider
 promptvc config set-provider openai
 promptvc config set-api-key sk-...
 
-# Apply the prompt to a file
-promptvc apply refactor-imports v1 --file src/main.py
+# Run a single execution
+promptvc run summarize v1
 
-# Review the proposed diff in the terminal, then confirm or abort
+# Evaluate v1 against a dataset
+promptvc eval summarize v1 --dataset ./data/inputs.json
 
-# View the file change history
-promptvc changes refactor-imports
+# Compare v1 and v2 side by side on the same dataset
+promptvc compare summarize v1 v2 --dataset ./data/inputs.json
+
+# Apply a prompt to a source file and review the diff
+promptvc apply summarize v2 --file src/main.py
+
+# View file modification history
+promptvc changes summarize
+
+# Lock a version to prevent further operations
+promptvc lock summarize v1
 ```
 
 ---
@@ -124,15 +162,27 @@ promptvc changes refactor-imports
 
 Initialize the repository. Creates the `.promptvc/` directory and required storage structure.
 
+```bash
+promptvc init
+```
+
 ---
 
-### `promptvc commit <name> --message <msg> --prompt <text>`
+### `promptvc commit <name>`
 
 Create a new version of a prompt space. Each commit is immutable and receives an auto-incremented version ID (`v1`, `v2`, etc.).
 
 ```bash
-promptvc commit summarize --message "Initial version" --prompt "Summarize the following text."
+promptvc commit summarize \
+  --message "Initial version" \
+  --prompt "Summarize the following text."
 ```
+
+| Argument | Required | Description |
+|---|---|---|
+| `name` | Yes | Prompt space name |
+| `--message` | Yes | Commit message |
+| `--prompt` | No | Prompt text (prompted interactively if omitted) |
 
 ---
 
@@ -142,6 +192,16 @@ Display all versions for a prompt space, sorted newest to oldest. Shows version 
 
 ```bash
 promptvc log summarize
+```
+
+---
+
+### `promptvc get <name> <version>`
+
+Print the raw prompt text for a specific version.
+
+```bash
+promptvc get summarize v2
 ```
 
 ---
@@ -161,48 +221,100 @@ promptvc diff summarize v1 v3
 Execute a specific prompt version using the configured provider. Records the output and token usage.
 
 ```bash
-promptvc run summarize v2
+promptvc run summarize v2 --provider openai
 ```
+
+| Argument | Required | Description |
+|---|---|---|
+| `name` | Yes | Prompt space name |
+| `version` | Yes | Version ID |
+| `--provider` | No | Provider name (default: configured or `mock`) |
 
 ---
 
-### `promptvc config set-provider <provider>`
+### `promptvc eval <name> <version>`
 
-Set the default provider. Stored in `.promptvc/config.json`.
+Run a prompt version against a structured dataset. Each input is executed independently. Results are stored under `evaluations` in the space record.
 
 ```bash
-promptvc config set-provider openai
+promptvc eval summarize v1 --dataset ./data/inputs.json --provider openai
+```
+
+| Argument | Required | Description |
+|---|---|---|
+| `name` | Yes | Prompt space name |
+| `version` | Yes | Version ID |
+| `--dataset` | Yes | Path to dataset JSON file |
+| `--provider` | No | Provider name (default: configured or `mock`) |
+
+Dataset format:
+
+```json
+[
+  { "input": "Text to process..." },
+  { "input": "Another text..." }
+]
 ```
 
 ---
 
-### `promptvc config set-api-key <key>`
+### `promptvc compare <name> <v1> <v2>`
 
-Set the API key for the configured provider.
+Run two prompt versions against the same dataset and display outputs side by side. This is a runtime comparison — no records are written.
 
 ```bash
-promptvc config set-api-key sk-...
+promptvc compare summarize v1 v2 --dataset ./data/inputs.json --provider openai
 ```
+
+| Argument | Required | Description |
+|---|---|---|
+| `name` | Yes | Prompt space name |
+| `v1` | Yes | First version ID |
+| `v2` | Yes | Second version ID |
+| `--dataset` | Yes | Path to dataset JSON file |
+| `--provider` | No | Provider name (default: configured or `mock`) |
 
 ---
 
-### `promptvc apply <name> <version> --file <path>`
+### `promptvc apply <name> <version>`
 
-Apply a prompt version to a file using the configured provider. The LLM returns a unified diff. The diff is displayed for review, and changes are applied only after explicit confirmation.
+Apply a prompt version to a source file using the configured provider. The LLM returns a unified diff. The diff is displayed for review and applied only after explicit confirmation.
 
 ```bash
 promptvc apply refactor-imports v2 --file src/utils.py
 ```
 
+| Argument | Required | Description |
+|---|---|---|
+| `name` | Yes | Prompt space name |
+| `version` | Yes | Version ID |
+| `--file` | Yes | Path to target file |
+
 ---
 
 ### `promptvc changes <name>`
 
-Display the file modification history for a prompt space, most recent first.
+Display the file modification history for a prompt space, most recent first. Each entry shows the timestamp, version, and file path.
 
 ```bash
 promptvc changes refactor-imports
 ```
+
+---
+
+### `promptvc config <action> <value>`
+
+Set configuration values. Stored in `.promptvc/config.json`.
+
+```bash
+promptvc config set-provider openai
+promptvc config set-api-key sk-...
+```
+
+| Action | Description |
+|---|---|
+| `set-provider` | Set the default provider |
+| `set-api-key` | Set the API key for the configured provider |
 
 ---
 
@@ -224,6 +336,8 @@ promptvc/
     commands/         # One file per command
   core/
     repo.py           # Main interface: versioning, execution, tracking
+    eval.py           # Evaluation engine: batch execution against datasets
+    compare.py        # Comparison engine: side-by-side version evaluation
     storage.py        # Storage engine: read/write space files
     tokenizer.py      # Token counting
     lock.py           # Lock guard logic
@@ -237,7 +351,7 @@ promptvc/
 
 ### Storage Layer
 
-Reads and writes JSON space files under `.promptvc/spaces/`. Each space contains versions, run history, and file change records.
+Reads and writes JSON space files under `.promptvc/spaces/`. Each space contains versions, run history, evaluation records, and file change logs.
 
 ### Version Layer
 
@@ -245,7 +359,19 @@ Managed by `PromptRepo`. Handles commit, retrieval, locking, and log operations.
 
 ### Execution Layer
 
-The `run` method in `PromptRepo` retrieves a prompt, sends it to the provider, validates the result, records the run, and returns the output.
+Three distinct execution paths:
+
+- **run** — single prompt execution via `PromptRepo.run()`. Result is appended to `runs`.
+- **eval** — batch execution via `run_evaluation()` in `core/eval.py`. Results are appended to `evaluations` via `repo.log_evaluation()`.
+- **compare** — dual batch execution via `compare_versions()` in `core/compare.py`. Runtime only; no storage writes.
+
+### Evaluation Layer
+
+`core/eval.py` implements `run_evaluation()`. It loads a JSON dataset, retrieves the prompt text for the specified version, constructs a full prompt per input, calls the provider, and returns structured results. Invalid datasets, missing fields, and missing provider outputs all raise `ValueError`.
+
+### Comparison Layer
+
+`core/compare.py` implements `compare_versions()`. It calls `run_evaluation()` for both versions on the same dataset, validates that result lengths match, and returns a per-case comparison structure containing inputs and outputs from both versions.
 
 ### Provider Layer
 
@@ -253,20 +379,20 @@ Providers implement a single method: `run(prompt: str) -> dict`. The dict must c
 
 ### Patch and Diff Engine
 
-`apply_unified_diff(original, diff)` in `promptvc/utils/diff_apply.py` parses a unified diff string and applies it to a string of file content. No external libraries. Strict validation: any removal line that does not match the original raises a `ValueError`.
+`apply_unified_diff(original, diff)` in `promptvc/utils/diff_apply.py` parses a unified diff string and applies it to file content. No external libraries. Strict validation: any removal line that does not match the original raises a `ValueError`.
 
 ---
 
 ## Storage Model
 
-Each prompt space is stored as a single JSON file:
+Each prompt space is stored as a single JSON file under `.promptvc/spaces/`:
 
 ```json
 {
   "versions": {
     "v1": {
       "id": "v1",
-      "prompt": "Reorganize all imports alphabetically.",
+      "prompt": "Summarize the following text in two sentences.",
       "message": "Initial version",
       "timestamp": "2026-01-01T10:00:00+00:00",
       "tokens": 42,
@@ -283,12 +409,23 @@ Each prompt space is stored as a single JSON file:
       "timestamp": "2026-01-01T10:05:00+00:00"
     }
   ],
+  "evaluations": [
+    {
+      "version": "v1",
+      "dataset": "./data/inputs.json",
+      "results": [
+        { "input": "...", "output": "...", "tokens": 120 },
+        { "input": "...", "output": "...", "tokens": 134 }
+      ],
+      "timestamp": "2026-01-01T10:10:00+00:00"
+    }
+  ],
   "file_changes": [
     {
       "version": "v1",
       "file": "src/main.py",
       "diff": "--- src/main.py\n+++ src/main.py\n@@\n- import os, sys\n+ import os\n+ import sys",
-      "timestamp": "2026-01-01T10:10:00+00:00"
+      "timestamp": "2026-01-01T10:15:00+00:00"
     }
   ]
 }
@@ -302,27 +439,37 @@ Each prompt space is stored as a single JSON file:
 
 Use versioned prompts as first-class tools in a development workflow. Commit a refactoring instruction, apply it across files, review the diffs, and log every change. The prompt that produced the change is always traceable.
 
+### Prompt Testing Workflows
+
+Use `eval` to run a prompt version against a fixed dataset before and after changes. Stored evaluation records provide a repeatable baseline. When outputs change unexpectedly, the record identifies which version introduced the regression.
+
+### Regression Detection
+
+Evaluate multiple versions of a prompt against the same dataset and compare stored results. If a newer version produces degraded output on known inputs, the evaluation history makes the regression visible without relying on manual review.
+
+### Prompt Iteration Cycles
+
+Use `compare` to evaluate two candidate versions side by side before deciding which to commit to. Run both against a representative dataset, review per-case outputs in the terminal, and promote the better-performing version. This replaces ad hoc testing with a structured iteration loop.
+
 ### Automated Code Modification
 
 Combine `promptvc apply` with a scripting layer to apply prompt-driven transformations across multiple files or repositories. The confirmation step can be bypassed in automated pipelines where output has already been reviewed.
 
 ### Audit and Traceability
 
-Every file modification made via `apply` is stored with its version reference, diff, and timestamp. When a question arises about why a file changed, the change log provides a complete answer without relying on Git blame or commit messages written by a human.
-
-### Reproducible Prompt Testing
-
-Run the same prompt version against the same input multiple times and compare outputs. All run records are stored, making it possible to detect drift in provider behavior over time.
+Every file modification made via `apply` is stored with its version reference, diff, and timestamp. Every evaluation is stored with its dataset path and per-case results. When a question arises about why a file changed or why a prompt was changed, the records provide a complete answer without relying on Git blame or informal documentation.
 
 ---
 
 ## Roadmap
 
-- **Evaluation system.** Define expected outputs and run automated evaluations against prompt versions to score quality and detect regressions.
+- **Evaluation scoring.** Attach scorer functions to datasets to produce numeric quality scores per case, enabling automated pass/fail thresholds.
+- **Dataset-based regression testing.** Define canonical datasets per prompt space and detect output drift across versions automatically.
+- **CI integration.** Run evaluations as part of a CI pipeline, blocking promotion of a prompt version if evaluation scores fall below a defined threshold.
 - **SaaS sync.** Push and pull prompt spaces to a remote registry for team sharing and backup.
-- **Team workflows.** Role-based access, version approval flows, and shared change history.
-- **Git integration.** Link prompt commits to Git commits, enabling cross-referenced history between code changes and the prompts that drove them.
+- **Team collaboration.** Role-based access, version approval flows, and shared change history.
 - **Provider expansion.** Add support for Anthropic, Mistral, and local model runners.
+- **Git integration.** Link prompt commits to Git commits, enabling cross-referenced history between code changes and the prompts that drove them.
 
 ---
 
