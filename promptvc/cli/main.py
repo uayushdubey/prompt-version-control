@@ -13,6 +13,7 @@ from promptvc.cli.commands.lock import handle as lock_handler
 from promptvc.cli.commands.log import handle as log_handler
 from promptvc.cli.commands.run import run_command
 from promptvc.cli.commands.changes import changes_command  # NEW
+from promptvc.cli.commands.eval import eval_command
 from promptvc.core import PromptVCError
 from promptvc.core.repo import PromptRepo
 
@@ -100,6 +101,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Prompt space name",
     )
 
+    # eval
+    eval_p = subparsers.add_parser("eval", help="Evaluate a prompt version on a dataset")
+    eval_p.add_argument("name", type=str, help="Prompt space name")
+    eval_p.add_argument("version", type=str, help="Version ID (e.g. v1)")
+    eval_p.add_argument("--dataset", type=str, required=True, help="Path to dataset JSON file")
+    eval_p.add_argument("--provider", type=str, default=None, help="Provider to use (optional)")
+
     return parser
 
 
@@ -123,6 +131,7 @@ def _build_handler_map() -> Dict[str, Handler]:
         "run": run_command,
         "config": config_command,
         "changes": changes_command,  # NEW
+        "eval": eval_command,
     }
 
 
