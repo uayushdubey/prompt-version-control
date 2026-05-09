@@ -230,6 +230,41 @@ class PromptRepo:
 
         self.storage.save_space(name, space)
 
+    def log_evaluation(
+            self,
+            name: str,
+            version: str,
+            dataset: str,
+            results: list,
+    ) -> None:
+        """
+        Log an evaluation run for a prompt version.
+
+        Stores:
+        - version
+        - dataset path
+        - results
+        - timestamp
+        """
+        name = self._normalize_name(name)
+        version = self._normalize_version(version)
+
+        space = self.storage.load_space(name)
+
+        record = {
+            "version": version,
+            "dataset": dataset,
+            "results": results,
+            "timestamp": self._utc_now_iso(),
+        }
+
+        if "evaluations" not in space:
+            space["evaluations"] = []
+
+        space["evaluations"].append(record)
+
+        self.storage.save_space(name, space)
+
     # -------------------------
     # Run
     # -------------------------
