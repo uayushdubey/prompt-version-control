@@ -7,7 +7,11 @@ from promptvc.core.repo import PromptRepo
 from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
 from promptvc.utils.config import get_config_value
-from promptvc.utils.template import render_template, find_unused_variables, extract_variables
+from promptvc.utils.template import (
+    render_template,
+    find_unused_variables,
+    extract_variables,
+)
 
 
 _PROVIDER_REGISTRY = {
@@ -17,35 +21,16 @@ _PROVIDER_REGISTRY = {
 
 
 def _resolve_provider(name: str):
-    """
-    Return the provider instance for the given name.
-
-    Raises:
-        ValueError: If the provider is not registered.
-    """
     provider_cls = _PROVIDER_REGISTRY.get(name)
     if provider_cls is None:
         available = ", ".join(f"'{k}'" for k in _PROVIDER_REGISTRY)
         raise ValueError(
             f"Provider '{name}' not found. Available providers: {available}"
         )
-
     return provider_cls()
 
 
 def _parse_vars(var_args: Optional[List[str]]) -> Dict[str, str]:
-    """
-    Parse a list of 'key=value' strings into a dictionary.
-
-    Args:
-        var_args: List of strings in 'key=value' format, or None.
-
-    Returns:
-        A dictionary mapping variable names to their values.
-
-    Raises:
-        ValueError: If any entry does not contain '=' or has an empty key.
-    """
     if not var_args:
         return {}
 
@@ -71,19 +56,42 @@ def _parse_vars(var_args: Optional[List[str]]) -> Dict[str, str]:
     return variables
 
 
-def _collect_missing_variables(
+def _collect_schema_variables(
+    schema_vars: Dict[str, Dict],
+    provided_vars: Dict[str, str],
+) -> Dict[str, str]:
+    """
+    Handle schema-aware variable collection:
+    - fill defaults
+    - prompt only for required missing vars
+    """
+    collected: Dict[str, str] = {}
+
+    for var_name, spec in schema_vars.items():
+        if var_name in provided_vars:
+            continue
+
+        required = spec.get("required", False)
+        default = spec.get("default")
+
+        # Use default if available
+        if default is not None:
+            collected[var_name] = str(default)
+            continue
+
+        # Ask only if required
+        if required:
+            value = input(f"  {var_name}: ").strip()
+            collected[var_name] = value
+
+    return collected
+
+
+def _collect_template_variables(
     required_vars: Set[str], provided_vars: Dict[str, str]
 ) -> Dict[str, str]:
     """
-    Interactively prompt the user for any required variables not already provided.
-
-    Args:
-        required_vars: Set of variable names required by the template.
-        provided_vars: Variables already supplied via --var flags.
-
-    Returns:
-        A dictionary of variable names to user-supplied values for any
-        that were missing from provided_vars. Empty dict if none are missing.
+    Fallback for non-schema prompts (existing behavior)
     """
     missing = required_vars - set(provided_vars.keys())
     if not missing:
@@ -119,10 +127,25 @@ def run_command(args: argparse.Namespace) -> None:
             f"Prompt '{args.name}@{args.version}' has no 'prompt' field."
         )
 
+    schema = repo.get_schema(args.name, args.version)
+    schema_vars = schema.get("variables", {}) if schema else {}
+
     variables = _parse_vars(getattr(args, "var", None))
 
-    required_vars = extract_variables(raw_prompt)
-    interactive_vars = _collect_missing_variables(required_vars, variables)
+    # -------------------------
+    # Schema-aware flow
+    # -------------------------
+    if schema_vars:
+        print("\nUsing schema-defined variables:")
+        interactive_vars = _collect_schema_variables(schema_vars, variables)
+
+    # -------------------------
+    # Fallback (no schema)
+    # -------------------------
+    else:
+        required_vars = extract_variables(raw_prompt)
+        interactive_vars = _collect_template_variables(required_vars, variables)
+
     variables = {**interactive_vars, **variables}
 
     rendered_prompt = render_template(raw_prompt, variables)
