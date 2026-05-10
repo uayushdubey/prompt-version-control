@@ -4,17 +4,19 @@ import argparse
 import sys
 from typing import Callable, Dict
 
+from promptvc.cli.commands.apply import apply_command
 from promptvc.cli.commands.commit import handle as commit_handler
 from promptvc.cli.commands.config import config_command
 from promptvc.cli.commands.diff import handle as diff_handler
 from promptvc.cli.commands.get import handle as get_handler
+from promptvc.cli.commands.inspect import inspect_command
 from promptvc.cli.commands.list import handle as list_handler
 from promptvc.cli.commands.lock import handle as lock_handler
 from promptvc.cli.commands.log import handle as log_handler
 from promptvc.cli.commands.run import run_command
 from promptvc.cli.commands.changes import changes_command
 from promptvc.cli.commands.eval import eval_command
-from promptvc.cli.commands.compare import compare_command  # NEW
+from promptvc.cli.commands.compare import compare_command
 
 from promptvc.core import PromptVCError
 from promptvc.core.repo import PromptRepo
@@ -75,8 +77,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("name", type=str, help="Prompt space name")
     run_p.add_argument("version", type=str, help="Version ID (e.g. v1)")
     run_p.add_argument(
-        "--provider", type=str, default="mock",
-        help="Provider to use for execution (default: mock)",
+        "--provider",
+        type=str,
+        default=None,
+        help="Provider to use (overrides config if set)",
+    )
+    run_p.add_argument(
+        "--var",
+        action="append",
+        help="Template variable (key=value). Can be used multiple times.",
     )
 
     # config
@@ -110,13 +119,26 @@ def build_parser() -> argparse.ArgumentParser:
     eval_p.add_argument("--dataset", type=str, required=True, help="Path to dataset JSON file")
     eval_p.add_argument("--provider", type=str, default=None, help="Provider to use (optional)")
 
-    # compare (NEW)
+    # compare
     compare_p = subparsers.add_parser("compare", help="Compare two prompt versions on a dataset")
     compare_p.add_argument("name", type=str, help="Prompt space name")
     compare_p.add_argument("v1", type=str, help="First version ID")
     compare_p.add_argument("v2", type=str, help="Second version ID")
     compare_p.add_argument("--dataset", type=str, required=True, help="Path to dataset JSON file")
     compare_p.add_argument("--provider", type=str, default=None, help="Provider to use (optional)")
+
+    # inspect
+    inspect_p = subparsers.add_parser("inspect", help="Inspect a prompt version")
+    inspect_p.add_argument("name", type=str)
+    inspect_p.add_argument("version", type=str)
+
+    # apply
+    apply_p = subparsers.add_parser("apply", help="Apply prompt to file")
+    apply_p.add_argument("name", type=str)
+    apply_p.add_argument("version", type=str)
+    apply_p.add_argument("--file", required=True)
+    apply_p.add_argument("--provider", type=str, default=None)
+    apply_p.add_argument("--var", action="append")
 
     return parser
 
@@ -142,7 +164,9 @@ def _build_handler_map() -> Dict[str, Handler]:
         "config": config_command,
         "changes": changes_command,
         "eval": eval_command,
-        "compare": compare_command,  # NEW
+        "compare": compare_command,
+        "inspect": inspect_command,
+        "apply": apply_command,
     }
 
 

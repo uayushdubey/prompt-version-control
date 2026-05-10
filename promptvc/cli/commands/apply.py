@@ -104,7 +104,7 @@ def apply_command(args: argparse.Namespace) -> None:
     provider = _resolve_provider(provider_name)
 
     repo = PromptRepo()
-    prompt_data = repo.get(args.name, args.version)
+    prompt_data = repo.get_version_meta(args.name, args.version)
 
     if prompt_data is None:
         raise ValueError(f"Prompt '{args.name}@{args.version}' not found.")

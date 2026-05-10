@@ -11,7 +11,7 @@ def inspect_command(args: argparse.Namespace) -> None:
     Inspect a prompt version and display developer-relevant information.
     """
     repo = PromptRepo()
-    prompt_data = repo.get(args.name, args.version)
+    prompt_data = repo.get_version_meta(args.name, args.version)
 
     if prompt_data is None:
         raise ValueError(f"Prompt '{args.name}@{args.version}' not found.")

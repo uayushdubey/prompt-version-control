@@ -117,9 +117,7 @@ def run_command(args: argparse.Namespace) -> None:
     provider = _resolve_provider(provider_name)
     repo = PromptRepo()
 
-    prompt_data = repo.get(args.name, args.version)
-    if prompt_data is None:
-        raise ValueError(f"Prompt '{args.name}@{args.version}' not found.")
+    prompt_data = repo.get_version_meta(args.name, args.version)
 
     raw_prompt = prompt_data.get("prompt")
     if raw_prompt is None:
@@ -146,6 +144,7 @@ def run_command(args: argparse.Namespace) -> None:
         required_vars = extract_variables(raw_prompt)
         interactive_vars = _collect_template_variables(required_vars, variables)
 
+    # CLI vars override interactive/defaults
     variables = {**interactive_vars, **variables}
 
     rendered_prompt = render_template(raw_prompt, variables)
