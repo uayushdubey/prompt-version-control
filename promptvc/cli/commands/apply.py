@@ -9,7 +9,6 @@ from promptvc.utils.config import get_config_value
 from promptvc.utils.diff_apply import apply_unified_diff
 from promptvc.utils.template import render_template, find_unused_variables, extract_variables
 
-# Store classes, NOT instances
 _PROVIDER_REGISTRY = {
     "mock": MockProvider,
     "openai": OpenAIProvider,
@@ -23,24 +22,10 @@ def _resolve_provider(name: str):
         raise ValueError(
             f"Provider '{name}' not found. Available providers: {available}"
         )
-
-    # Lazy instantiation (fixes API key crash)
     return provider_cls()
 
 
 def _parse_vars(var_args: Optional[List[str]]) -> Dict[str, str]:
-    """
-    Parse a list of 'key=value' strings into a dictionary.
-
-    Args:
-        var_args: List of strings in 'key=value' format, or None.
-
-    Returns:
-        A dictionary mapping variable names to their values.
-
-    Raises:
-        ValueError: If any entry does not contain '=' or has an empty key.
-    """
     if not var_args:
         return {}
 
@@ -62,21 +47,39 @@ def _parse_vars(var_args: Optional[List[str]]) -> Dict[str, str]:
     return variables
 
 
-def _collect_missing_variables(
+# -------------------------
+# NEW: schema-aware handling
+# -------------------------
+def _collect_schema_variables(
+    schema_vars: Dict[str, Dict],
+    provided_vars: Dict[str, str],
+) -> Dict[str, str]:
+    collected: Dict[str, str] = {}
+
+    print("\nUsing schema-defined variables:")
+
+    for var_name, spec in schema_vars.items():
+        if var_name in provided_vars:
+            continue
+
+        required = spec.get("required", False)
+        default = spec.get("default")
+
+        if default is not None:
+            collected[var_name] = str(default)
+            continue
+
+        if required:
+            value = input(f"  {var_name}: ").strip()
+            collected[var_name] = value
+
+    return collected
+
+
+def _collect_template_variables(
     required_vars: Set[str],
     provided_vars: Dict[str, str],
 ) -> Dict[str, str]:
-    """
-    Interactively prompt the user for any required variables not already provided.
-
-    Args:
-        required_vars: Set of variable names required by the template.
-        provided_vars: Variables already supplied via --var flags.
-
-    Returns:
-        A dictionary of variable names to user-supplied values for any
-        that were missing from provided_vars. Empty dict if none are missing.
-    """
     missing = required_vars - set(provided_vars.keys())
     if not missing:
         return {}
@@ -110,10 +113,20 @@ def apply_command(args: argparse.Namespace) -> None:
     if raw_prompt is None:
         raise ValueError(f"Prompt '{args.name}@{args.version}' has no 'prompt' field.")
 
+    schema = repo.get_schema(args.name, args.version)
+    schema_vars = schema.get("variables", {}) if schema else {}
+
     variables = _parse_vars(getattr(args, "var", None))
 
-    required_vars = extract_variables(raw_prompt)
-    interactive_vars = _collect_missing_variables(required_vars, variables)
+    # -------------------------
+    # Schema-aware flow
+    # -------------------------
+    if schema_vars:
+        interactive_vars = _collect_schema_variables(schema_vars, variables)
+    else:
+        required_vars = extract_variables(raw_prompt)
+        interactive_vars = _collect_template_variables(required_vars, variables)
+
     variables = {**interactive_vars, **variables}
 
     rendered_prompt = render_template(raw_prompt, variables)
@@ -178,7 +191,6 @@ NO_CHANGES
         print("✓ No changes required.")
         return
 
-    # Optional safety check (recommended)
     if not output.startswith("---"):
         print("✗ Invalid diff format received.")
         return
