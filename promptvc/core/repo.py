@@ -87,7 +87,13 @@ class PromptRepo:
     # Commit
     # -------------------------
 
-    def _build_version(self, version_id: str, prompt: str, message: str) -> Dict[str, Any]:
+    def _build_version(
+        self,
+        version_id: str,
+        prompt: str,
+        message: str,
+        schema: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         return {
             "id": version_id,
             "prompt": prompt,
@@ -96,9 +102,16 @@ class PromptRepo:
             "tokens": self.tokenizer.count(prompt),
             "locked": False,
             "hash": self._sha256(prompt),
+            "schema": schema or {},
         }
 
-    def commit(self, name: str, prompt: str, message: str) -> Dict[str, Any]:
+    def commit(
+            self,
+            name: str,
+            prompt: str,
+            message: str,
+            schema: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Create a new immutable version of a prompt.
 
@@ -114,6 +127,10 @@ class PromptRepo:
         prompt = prompt.strip()
         message = message.strip()
 
+        # Validate schema after normalization
+        if schema is not None:
+            self._validate_schema(schema)
+
         space = self.storage.load_or_create_space(name)
         version_id = self.storage.next_version_id(space)
 
@@ -121,6 +138,7 @@ class PromptRepo:
             version_id=version_id,
             prompt=prompt,
             message=message,
+            schema=schema,
         )
 
         space["versions"][version_id] = version_data
@@ -131,7 +149,6 @@ class PromptRepo:
         self._on_commit(version_data)
 
         return version_data
-
     # -------------------------
     # Log
     # -------------------------
@@ -173,6 +190,17 @@ class PromptRepo:
 
         return self.storage.get_version(name, version)
 
+    def get_schema(self, name: str, version: str) -> Dict[str, Any]:
+        """
+        Return schema for a given prompt version.
+        Returns empty dict if no schema exists.
+        """
+        name = self._normalize_name(name)
+        version = self._normalize_version(version)
+
+        data = self.storage.get_version(name, version)
+        return data.get("schema", {})
+
     def latest(self, name: str) -> Dict[str, Any]:
         """
         Return metadata for the latest version of a space.
@@ -193,7 +221,7 @@ class PromptRepo:
 
         return self.storage.get_version(name, latest_id)
 
-    #Helpers
+    # Helpers
 
     def log_file_change(
             self,
@@ -395,3 +423,30 @@ class PromptRepo:
                 return -1
 
         return sorted(versions, key=version_order, reverse=True)
+
+    def _validate_schema(self, schema: Dict[str, Any]) -> None:
+        if not isinstance(schema, dict):
+            raise ValueError("schema must be a dictionary.")
+
+        variables = schema.get("variables")
+        if variables is None:
+            return  # allow empty schema
+
+        if not isinstance(variables, dict):
+            raise ValueError("schema.variables must be a dictionary.")
+
+        for name, spec in variables.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError("variable names must be non-empty strings.")
+
+            if not isinstance(spec, dict):
+                raise ValueError(f"schema for '{name}' must be a dictionary.")
+
+            if "type" in spec and not isinstance(spec["type"], str):
+                raise ValueError(f"'type' for '{name}' must be a string.")
+
+            if "required" in spec and not isinstance(spec["required"], bool):
+                raise ValueError(f"'required' for '{name}' must be a boolean.")
+
+            if "description" in spec and not isinstance(spec["description"], str):
+                raise ValueError(f"'description' for '{name}' must be a string.")
