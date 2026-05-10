@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import json
+from typing import Dict, Any
 
 from promptvc.core.repo import PromptRepo
-from promptvc.core.eval import run_evaluation
 from promptvc.utils.config import get_config_value
 from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
+from promptvc.utils.template import render_template, find_unused_variables
 
 
-# Provider registry (lazy instantiation)
 _PROVIDER_REGISTRY = {
     "mock": MockProvider,
     "openai": OpenAIProvider,
@@ -27,7 +28,6 @@ def _resolve_provider(name: str):
 
 
 def eval_command(args: argparse.Namespace) -> None:
-    # Resolve provider (CLI > config > default)
     provider_name = (
         getattr(args, "provider", None)
         or get_config_value("provider")
@@ -35,19 +35,59 @@ def eval_command(args: argparse.Namespace) -> None:
     )
 
     provider = _resolve_provider(provider_name)
-
     repo = PromptRepo()
 
-    # Run evaluation
-    result = run_evaluation(
-        repo=repo,
-        name=args.name,
-        version=args.version,
-        dataset_path=args.dataset,
-        provider=provider,
-    )
+    # Load prompt
+    prompt_data = repo.get(args.name, args.version)
+    if prompt_data is None:
+        raise ValueError(f"Prompt '{args.name}@{args.version}' not found.")
 
-    results = result.get("results", [])
+    raw_prompt = prompt_data.get("prompt")
+    if raw_prompt is None:
+        raise ValueError(f"Prompt '{args.name}@{args.version}' has no 'prompt' field.")
+
+    # Load dataset
+    try:
+        with open(args.dataset, "r", encoding="utf-8") as f:
+            dataset = json.load(f)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load dataset: {e}") from e
+
+    if not isinstance(dataset, list):
+        raise ValueError("Dataset must be a list of objects.")
+
+    results = []
+
+    # Run evaluation loop
+    for i, row in enumerate(dataset, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"Dataset row {i} is not an object.")
+
+        variables: Dict[str, Any] = row
+
+        # Render prompt
+        rendered_prompt = render_template(raw_prompt, variables)
+
+        # Warn unused vars (optional but useful)
+        unused = find_unused_variables(raw_prompt, variables)
+        if unused:
+            unused_list = ", ".join(sorted(unused))
+            print(f"Warning (case {i}): Unused variable(s): {unused_list}")
+
+        # Run provider
+        result = provider.run(rendered_prompt)
+
+        if not isinstance(result, dict):
+            raise ValueError(f"Invalid provider response at case {i}")
+
+        output = result.get("output")
+        tokens = result.get("tokens")
+
+        results.append({
+            "input": row.get("input"),
+            "output": output,
+            "tokens": tokens,
+        })
 
     # Print results
     for i, case in enumerate(results, start=1):
