@@ -90,3 +90,19 @@ def render_template(template: str, variables: Dict[str, str]) -> str:
         return str(variables[match.group(1)])
 
     return _VARIABLE_PATTERN.sub(replace_match, template)
+
+def find_unused_variables(template: str, variables: Dict[str, str]) -> Set[str]:
+    """
+    Identify variables that were provided but not used in the template.
+
+    Args:
+        template: The template string containing variable placeholders.
+        variables: A dictionary of provided variables.
+
+    Returns:
+        A set of variable names that were provided but not used in the template.
+    """
+    required: Set[str] = extract_variables(template)
+    provided: Set[str] = set(variables.keys())
+
+    return provided - required

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import argparse
+from typing import Dict, List, Optional
 
 from promptvc.core.repo import PromptRepo
 from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
 from promptvc.utils.config import get_config_value
+from promptvc.utils.template import render_template, find_unused_variables
 
-# Provider registry — store classes, not instances
+
 _PROVIDER_REGISTRY = {
     "mock": MockProvider,
     "openai": OpenAIProvider,
@@ -28,8 +30,45 @@ def _resolve_provider(name: str):
             f"Provider '{name}' not found. Available providers: {available}"
         )
 
-    # Instantiate lazily (fixes API key issue)
     return provider_cls()
+
+
+def _parse_vars(var_args: Optional[List[str]]) -> Dict[str, str]:
+    """
+    Parse a list of 'key=value' strings into a dictionary.
+
+    Args:
+        var_args: List of strings in 'key=value' format, or None.
+
+    Returns:
+        A dictionary mapping variable names to their values.
+
+    Raises:
+        ValueError: If any entry does not contain '=' or has an empty key.
+    """
+    if not var_args:
+        return {}
+
+    variables: Dict[str, str] = {}
+
+    for entry in var_args:
+        if "=" not in entry:
+            raise ValueError(
+                f"Invalid --var format: '{entry}'. Expected 'key=value'."
+            )
+
+        key, value = entry.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+
+        if not key:
+            raise ValueError(
+                f"Invalid --var format: '{entry}'. Key must not be empty."
+            )
+
+        variables[key] = value
+
+    return variables
 
 
 def run_command(args: argparse.Namespace) -> None:
@@ -40,9 +79,31 @@ def run_command(args: argparse.Namespace) -> None:
     )
 
     provider = _resolve_provider(provider_name)
-
     repo = PromptRepo()
-    result = repo.run(args.name, args.version, provider)
+
+    prompt_data = repo.get(args.name, args.version)
+    if prompt_data is None:
+        raise ValueError(f"Prompt '{args.name}@{args.version}' not found.")
+
+    raw_prompt = prompt_data.get("prompt")
+    if raw_prompt is None:
+        raise ValueError(
+            f"Prompt '{args.name}@{args.version}' has no 'prompt' field."
+        )
+
+    variables = _parse_vars(getattr(args, "var", None))
+
+    rendered_prompt = render_template(raw_prompt, variables)
+
+    unused = find_unused_variables(raw_prompt, variables)
+    if unused:
+        unused_list = ", ".join(sorted(unused))
+        print(f"Warning: Unused variable(s): {unused_list}")
+
+    result = provider.run(rendered_prompt)
+
+    if not isinstance(result, dict):
+        raise ValueError("Provider returned invalid response format.")
 
     output = result.get("output")
     if output is None:
