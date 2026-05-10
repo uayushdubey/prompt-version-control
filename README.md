@@ -38,6 +38,8 @@ This is not sustainable as LLM usage matures.
 
 **Code modification.** Prompts can be applied to files via an LLM-powered apply pipeline that generates a strict unified diff, requires confirmation, and logs every change made.
 
+**Structured Inputs.** Prompts can define schemas for their inputs, enabling type-aware, self-documented, and interactive execution without hardcoding variables.
+
 ---
 
 ## Key Capabilities
@@ -50,11 +52,63 @@ Every commit creates an immutable version with a unique ID, SHA-256 hash, token 
 
 Compare token counts between any two versions of a prompt. Useful for cost estimation and understanding how a prompt has grown or shrunk over iterations.
 
+### Prompt Templates and Schema
+
+Prompts can contain template variables using the `{{variable_name}}` syntax:
+
+```
+Fix the following code:\n{{code}}\nStyle guide: {{style}}
+```
+
+**Template behavior:**
+
+- Variables are extracted automatically from the prompt text.
+- Any variable referenced in the template must be provided at runtime, either via `--var` or interactively.
+- Extra variables provided but not referenced in the template produce a warning and are ignored.
+
+**Schema support:**
+
+A prompt version can optionally define a schema that describes its variables:
+
+```json
+{
+  "variables": {
+    "code": {
+      "type": "string",
+      "required": true,
+      "description": "Code to fix"
+    },
+    "style": {
+      "type": "string",
+      "required": false,
+      "default": "PEP8",
+      "description": "Style guide to apply"
+    }
+  }
+}
+```
+
+When a schema is present:
+
+- Required variables with no `--var` value are collected interactively at runtime.
+- Optional variables use their `default` value if not provided.
+- `--var key=value` overrides both schema defaults and interactive input.
+
+When no schema is present, the template engine falls back to extracting variables directly from `{{...}}` placeholders. Missing variables are still collected interactively.
+
+**CLI override:**
+
+```bash
+promptvc run fix_code v2 --var code="print('hi')" --var style=pep8
+```
+
+`--var` can be repeated for multiple variables. It takes precedence over interactive input and schema defaults.
+
 ### Execution Model
 
 There are three distinct execution modes:
 
-- **run** — single execution of a prompt version against a provider. Output and token usage are recorded.
+- **run** — single execution of a prompt version against a provider. Variables are resolved (from `--var`, interactively, or schema defaults) and injected into the prompt before execution. Output and token usage are recorded.
 - **eval** — batch execution of a prompt version across a structured dataset. Each input is run independently and all outputs are collected and stored.
 - **compare** — comparative evaluation of two prompt versions against the same dataset. Outputs are displayed side by side at runtime. No storage is written for compare operations.
 
@@ -80,11 +134,12 @@ The `compare` command runs two prompt versions against the same dataset and disp
 The `apply` command is the core feature for prompt-driven code modification. Given a prompt name, version, and target file, it:
 
 1. Loads the raw prompt text for that version.
-2. Reads the target file.
-3. Constructs a structured instruction that asks the LLM to return only a unified diff.
-4. Sends the combined input to the configured provider.
-5. Displays the proposed diff for review.
-6. Applies the diff safely using an internal patch engine, with confirmation required before any write occurs.
+2. Resolves template variables from `--var` flags, schema defaults, or interactive input — before the prompt is sent to the provider.
+3. Reads the target file.
+4. Constructs a structured instruction that asks the LLM to return only a unified diff.
+5. Sends the combined input to the configured provider.
+6. Displays the proposed diff for review.
+7. Applies the diff safely using an internal patch engine, with confirmation required before any write occurs.
 
 The LLM is explicitly instructed not to return full file content, not to include explanations, and not to use markdown. If no changes are needed, it returns `NO_CHANGES` and the tool exits cleanly.
 
@@ -138,6 +193,12 @@ promptvc config set-api-key sk-...
 # Run a single execution
 promptvc run summarize v1
 
+# Run with template variables
+promptvc run fix_code v2 --var code="print('hi')" --var style=pep8
+
+# Inspect a prompt version
+promptvc inspect fix_code v2
+
 # Evaluate v1 against a dataset
 promptvc eval summarize v1 --dataset ./data/inputs.json
 
@@ -146,6 +207,9 @@ promptvc compare summarize v1 v2 --dataset ./data/inputs.json
 
 # Apply a prompt to a source file and review the diff
 promptvc apply summarize v2 --file src/main.py
+
+# Apply with template variables
+promptvc apply fix_code v2 --file src/utils.py --var style=pep8
 
 # View file modification history
 promptvc changes summarize
@@ -206,6 +270,24 @@ promptvc get summarize v2
 
 ---
 
+### `promptvc inspect <name> <version>`
+
+Display detailed information about a specific prompt version. Useful for understanding what a prompt expects before running it.
+
+```bash
+promptvc inspect fix_code v2
+```
+
+Output includes:
+
+- **Content** — the raw prompt text.
+- **Variables** — all template variables. If a schema exists, shows each variable's required/optional status, default value, and description. Otherwise, falls back to names extracted from `{{...}}` placeholders.
+- **Metadata** — timestamp, token count, and SHA-256 hash.
+- **Status** — whether the version is locked.
+- **Example Usage** — a ready-to-run `promptvc run` command with `--var` placeholders for each variable.
+
+---
+
 ### `promptvc diff <name> <v1> <v2>`
 
 Show the token count difference between two versions.
@@ -220,8 +302,11 @@ promptvc diff summarize v1 v3
 
 Execute a specific prompt version using the configured provider. Records the output and token usage.
 
+If the prompt contains template variables, any missing values are collected interactively. Provider resolution order: `--provider` flag → configured default → `mock`.
+
 ```bash
 promptvc run summarize v2 --provider openai
+promptvc run fix_code v2 --var code="print('hi')" --var style=pep8
 ```
 
 | Argument | Required | Description |
@@ -229,6 +314,7 @@ promptvc run summarize v2 --provider openai
 | `name` | Yes | Prompt space name |
 | `version` | Yes | Version ID |
 | `--provider` | No | Provider name (default: configured or `mock`) |
+| `--var` | No | Template variable in `key=value` format. Can be repeated. |
 
 ---
 
@@ -280,8 +366,11 @@ promptvc compare summarize v1 v2 --dataset ./data/inputs.json --provider openai
 
 Apply a prompt version to a source file using the configured provider. The LLM returns a unified diff. The diff is displayed for review and applied only after explicit confirmation.
 
+If the prompt contains template variables, missing values are collected interactively before the provider is called. `--var` flags override interactive input.
+
 ```bash
 promptvc apply refactor-imports v2 --file src/utils.py
+promptvc apply fix_code v2 --file src/utils.py --var style=pep8
 ```
 
 | Argument | Required | Description |
@@ -289,6 +378,8 @@ promptvc apply refactor-imports v2 --file src/utils.py
 | `name` | Yes | Prompt space name |
 | `version` | Yes | Version ID |
 | `--file` | Yes | Path to target file |
+| `--provider` | No | Provider name (default: configured or `mock`) |
+| `--var` | No | Template variable in `key=value` format. Can be repeated. |
 
 ---
 
@@ -335,7 +426,7 @@ promptvc/
   cli/
     commands/         # One file per command
   core/
-    repo.py           # Main interface: versioning, execution, tracking
+    repo.py           # Main interface: versioning, execution, tracking, schema
     eval.py           # Evaluation engine: batch execution against datasets
     compare.py        # Comparison engine: side-by-side version evaluation
     storage.py        # Storage engine: read/write space files
@@ -347,6 +438,7 @@ promptvc/
   utils/
     config.py         # Config file read/write
     diff_apply.py     # Unified diff parser and patch engine
+    template.py       # Template variable extraction, validation, and rendering
 ```
 
 ### Storage Layer
@@ -355,7 +447,17 @@ Reads and writes JSON space files under `.promptvc/spaces/`. Each space contains
 
 ### Version Layer
 
-Managed by `PromptRepo`. Handles commit, retrieval, locking, and log operations. All version IDs are auto-incremented and normalized.
+Managed by `PromptRepo`. Handles commit, retrieval, locking, and log operations. All version IDs are auto-incremented and normalized. Versions may optionally include a `schema` field describing their input variables; `repo.get_schema(name, version)` retrieves it, returning an empty dict for versions committed without one.
+
+### Template Layer
+
+`utils/template.py` provides a minimal, dependency-free template system. It supports `{{variable_name}}` syntax with strict validation. Key functions:
+
+- `extract_variables(template)` — returns all variable names found in the template.
+- `validate_variables(template, variables)` — raises `TemplateError` if any required variables are missing.
+- `render_template(template, variables)` — validates and substitutes all variables. Missing variables raise an error; extra variables are ignored with a warning.
+
+The template layer is used by both `run` and `apply` before any provider call is made.
 
 ### Execution Layer
 
@@ -375,7 +477,7 @@ Three distinct execution paths:
 
 ### Provider Layer
 
-Providers implement a single method: `run(prompt: str) -> dict`. The dict must contain an `output` key. Additional fields (`tokens`, `model`, `latency_ms`) are supported for future use.
+Providers implement a single method: `run(prompt: str) -> dict`. The dict must contain an `output` key. Additional fields (`tokens`, `model`, `latency_ms`) are supported for future use. Provider resolution order across all commands: `--provider` CLI flag → value from `config.json` → `mock`.
 
 ### Patch and Diff Engine
 
@@ -397,7 +499,21 @@ Each prompt space is stored as a single JSON file under `.promptvc/spaces/`:
       "timestamp": "2026-01-01T10:00:00+00:00",
       "tokens": 42,
       "locked": false,
-      "hash": "a3f5..."
+      "hash": "a3f5...",
+      "schema": {
+        "variables": {
+          "code": {
+            "type": "string",
+            "required": true,
+            "description": "Code to fix"
+          },
+          "style": {
+            "type": "string",
+            "required": false,
+            "default": "PEP8"
+          }
+        }
+      }
     }
   },
   "latest": "v1",
@@ -430,6 +546,8 @@ Each prompt space is stored as a single JSON file under `.promptvc/spaces/`:
   ]
 }
 ```
+
+The `schema` field is optional. Versions committed before schema support was introduced will not have it; all runtime behavior falls back gracefully to template-based variable extraction.
 
 ---
 
