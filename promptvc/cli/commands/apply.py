@@ -8,6 +8,14 @@ from promptvc.providers.openai import OpenAIProvider
 from promptvc.utils.config import get_config_value
 from promptvc.utils.diff_apply import apply_unified_diff
 from promptvc.utils.template import render_template, find_unused_variables, extract_variables
+from promptvc.utils.console import (
+    success,
+    error,
+    warning,
+    section,
+    pretty_diff,
+    dim,
+)
 
 _PROVIDER_REGISTRY = {
     "mock": MockProvider,
@@ -56,7 +64,7 @@ def _collect_schema_variables(
 ) -> Dict[str, str]:
     collected: Dict[str, str] = {}
 
-    print("\nUsing schema-defined variables:")
+    print(section("Using Schema Variables"))
 
     for var_name, spec in schema_vars.items():
         if var_name in provided_vars:
@@ -70,7 +78,7 @@ def _collect_schema_variables(
             continue
 
         if required:
-            value = input(f"  {var_name}: ").strip()
+            value = input(dim(f"  {var_name}: ")).strip()
             collected[var_name] = value
 
     return collected
@@ -84,7 +92,7 @@ def _collect_template_variables(
     if not missing:
         return {}
 
-    print("\nMissing variables detected. Please provide values:")
+    print(section("Missing Variables"))
 
     collected: Dict[str, str] = {}
     for var in sorted(missing):
@@ -104,8 +112,8 @@ def apply_command(args: argparse.Namespace) -> None:
     )
 
     provider = _resolve_provider(provider_name)
-    print("\n--- Provider ---")
-    print(provider_name)
+    print(section("Provider"))
+    print(dim(provider_name))
 
     repo = PromptRepo()
     prompt_data = repo.get_version_meta(args.name, args.version)
@@ -141,7 +149,7 @@ def apply_command(args: argparse.Namespace) -> None:
         missing = required_vars - set(variables.keys())
 
         if missing:
-            print("\nMissing required variables (dry-run, not prompting):")
+            print(section("Missing Required Variables (dry-run)"))
             for var in sorted(missing):
                 print(f"  {var}")
 
@@ -150,14 +158,13 @@ def apply_command(args: argparse.Namespace) -> None:
         except Exception:
             rendered_prompt = raw_prompt
 
-        print("\n--- Rendered Prompt ---")
+        print(section("Rendered Prompt"))
         print(rendered_prompt)
 
-        print("\n--- File Content ---")
         MAX_LINES = 200
         lines = file_content.splitlines()
 
-        print("\n--- File Content ---")
+        print(section("File Content"))
         if len(lines) > MAX_LINES:
             preview = "\n".join(lines[:MAX_LINES])
             print(preview)
@@ -181,7 +188,7 @@ def apply_command(args: argparse.Namespace) -> None:
     unused = find_unused_variables(raw_prompt, variables)
     if unused:
         unused_list = ", ".join(sorted(unused))
-        print(f"Warning: Unused variable(s): {unused_list}")
+        print(warning(f"Unused variable(s): {unused_list}"))
 
     combined_input = f"""
 You are a senior software engineer.
@@ -229,23 +236,23 @@ NO_CHANGES
         raise ValueError("Provider returned empty output.")
 
     if output == "NO_CHANGES":
-        print("✓ No changes required.")
+        print(success("No changes required."))
         return
 
     if not output.startswith("---"):
-        print("✗ Invalid diff format received.")
+        print(error("Invalid diff format received."))
         return
 
-    print("\n--- Proposed changes ---")
-    print(output)
+    print(section("Proposed Changes"))
+    print(pretty_diff(output))
 
-    answer = input("\nApply changes? (y/n): ").strip().lower()
+    answer = input(dim("\nApply changes? (y/n): ")).strip().lower()
 
     if answer == "y":
         try:
             new_content = apply_unified_diff(file_content, output)
         except ValueError as e:
-            print(f"✗ Failed to apply diff: {e}")
+            print(error(f"Failed to apply diff: {e}"))
             return
 
         try:
@@ -261,7 +268,7 @@ NO_CHANGES
             diff=output,
         )
 
-        print(f"✓ Changes applied to '{args.file}'")
+        print(success(f"Changes applied to '{args.file}'"))
 
     else:
-        print("Aborted. No changes made.")
+        print(dim("Aborted. No changes made."))
