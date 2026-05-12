@@ -101,3 +101,6 @@ def print_warning(text: str) -> None:
 
 def print_info(text: str) -> None:
     print(info(text))
+
+def dim(text: str) -> str:
+    return _colorize(text, Color.DIM)
