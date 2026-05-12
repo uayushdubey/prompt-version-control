@@ -85,7 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--var",
         action="append",
-        help="Template variable (key=value). Can be used multiple times.",
+        help="Template variable (key=value). Can be repeated. Overrides schema/default values.",
+    )
+    run_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview rendered prompt without executing",
     )
 
     # config
@@ -129,16 +134,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     # inspect
     inspect_p = subparsers.add_parser("inspect", help="Inspect a prompt version")
-    inspect_p.add_argument("name", type=str)
-    inspect_p.add_argument("version", type=str)
-
+    inspect_p.add_argument("name", type=str, help="Prompt space name")
+    inspect_p.add_argument("version", type=str, help="Version ID (e.g. v1)")
     # apply
     apply_p = subparsers.add_parser("apply", help="Apply prompt to file")
     apply_p.add_argument("name", type=str)
     apply_p.add_argument("version", type=str)
-    apply_p.add_argument("--file", required=True)
-    apply_p.add_argument("--provider", type=str, default=None)
-    apply_p.add_argument("--var", action="append")
+    apply_p.add_argument(
+        "--file",
+        required=True,
+        help="Target file to modify",
+    )
+    apply_p.add_argument(
+        "--provider",
+        type=str,
+        default=None,
+        help="Provider to use (overrides config if set)",
+    )
+    apply_p.add_argument(
+        "--var",
+        action="append",
+        help="Template variable (key=value). Can be repeated. Overrides schema/default values.",
+    )
+    apply_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview rendered prompt and file content without executing or applying changes",
+    )
 
     return parser
 
