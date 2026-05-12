@@ -130,6 +130,39 @@ def run_command(args: argparse.Namespace) -> None:
 
     variables = _parse_vars(getattr(args, "var", None))
 
+    is_dry_run = getattr(args, "dry_run", False)
+
+    # -------------------------
+    # Determine required variables
+    # -------------------------
+    if schema_vars:
+        required_vars = {
+            name for name, spec in schema_vars.items()
+            if spec.get("required", False) and spec.get("default") is None
+        }
+    else:
+        required_vars = extract_variables(raw_prompt)
+
+    # -------------------------
+    # Dry-run mode (non-interactive)
+    # -------------------------
+    if is_dry_run:
+        missing = required_vars - set(variables.keys())
+
+        if missing:
+            print("\nMissing variables (dry-run, not prompting):")
+            for var in sorted(missing):
+                print(f"  {var}")
+
+        try:
+            rendered_prompt = render_template(raw_prompt, variables)
+        except Exception:
+            rendered_prompt = raw_prompt  # fallback for visibility
+
+        print("\n--- Rendered Prompt ---")
+        print(rendered_prompt)
+        return
+
     # -------------------------
     # Schema-aware flow
     # -------------------------
@@ -141,7 +174,6 @@ def run_command(args: argparse.Namespace) -> None:
     # Fallback (no schema)
     # -------------------------
     else:
-        required_vars = extract_variables(raw_prompt)
         interactive_vars = _collect_template_variables(required_vars, variables)
 
     # CLI vars override interactive/defaults
