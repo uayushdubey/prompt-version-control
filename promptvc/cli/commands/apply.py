@@ -95,6 +95,8 @@ def _collect_template_variables(
 
 
 def apply_command(args: argparse.Namespace) -> None:
+    is_dry_run = getattr(args, "dry_run", False)
+
     provider_name = (
         getattr(args, "provider", None)
         or get_config_value("provider")
@@ -102,6 +104,8 @@ def apply_command(args: argparse.Namespace) -> None:
     )
 
     provider = _resolve_provider(provider_name)
+    print("\n--- Provider ---")
+    print(provider_name)
 
     repo = PromptRepo()
     prompt_data = repo.get_version_meta(args.name, args.version)
@@ -118,13 +122,56 @@ def apply_command(args: argparse.Namespace) -> None:
 
     variables = _parse_vars(getattr(args, "var", None))
 
+    if schema_vars:
+        required_vars = {
+            var_name
+            for var_name, spec in schema_vars.items()
+            if spec.get("required", False) and spec.get("default") is None
+        }
+    else:
+        required_vars = extract_variables(raw_prompt)
+
+    try:
+        with open(args.file, "r", encoding="utf-8") as f:
+            file_content = f.read()
+    except OSError as e:
+        raise RuntimeError(f"Failed to read file '{args.file}': {e}") from e
+
+    if is_dry_run:
+        missing = required_vars - set(variables.keys())
+
+        if missing:
+            print("\nMissing required variables (dry-run, not prompting):")
+            for var in sorted(missing):
+                print(f"  {var}")
+
+        try:
+            rendered_prompt = render_template(raw_prompt, variables)
+        except Exception:
+            rendered_prompt = raw_prompt
+
+        print("\n--- Rendered Prompt ---")
+        print(rendered_prompt)
+
+        print("\n--- File Content ---")
+        MAX_LINES = 200
+        lines = file_content.splitlines()
+
+        print("\n--- File Content ---")
+        if len(lines) > MAX_LINES:
+            preview = "\n".join(lines[:MAX_LINES])
+            print(preview)
+            print(f"\n... ({len(lines) - MAX_LINES} more lines)")
+        else:
+            print(file_content)
+        return
+
     # -------------------------
     # Schema-aware flow
     # -------------------------
     if schema_vars:
         interactive_vars = _collect_schema_variables(schema_vars, variables)
     else:
-        required_vars = extract_variables(raw_prompt)
         interactive_vars = _collect_template_variables(required_vars, variables)
 
     variables = {**interactive_vars, **variables}
@@ -135,12 +182,6 @@ def apply_command(args: argparse.Namespace) -> None:
     if unused:
         unused_list = ", ".join(sorted(unused))
         print(f"Warning: Unused variable(s): {unused_list}")
-
-    try:
-        with open(args.file, "r", encoding="utf-8") as f:
-            file_content = f.read()
-    except OSError as e:
-        raise RuntimeError(f"Failed to read file '{args.file}': {e}") from e
 
     combined_input = f"""
 You are a senior software engineer.
