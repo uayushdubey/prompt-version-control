@@ -12,6 +12,13 @@ from promptvc.utils.template import (
     find_unused_variables,
     extract_variables,
 )
+from promptvc.utils.console import (
+    success,
+    error,
+    warning,
+    section,
+    dim,
+)
 
 
 _PROVIDER_REGISTRY = {
@@ -81,7 +88,7 @@ def _collect_schema_variables(
 
         # Ask only if required
         if required:
-            value = input(f"  {var_name}: ").strip()
+            value = input(dim(f"  {var_name}: ")).strip()
             collected[var_name] = value
 
     return collected
@@ -97,11 +104,11 @@ def _collect_template_variables(
     if not missing:
         return {}
 
-    print("\nMissing variables detected. Please provide values:")
+    print(section("Missing Variables"))
 
     collected: Dict[str, str] = {}
     for var in sorted(missing):
-        value = input(f"  {var}: ").strip()
+        value = input(dim(f"  {var}: ")).strip()
         collected[var] = value
 
     return collected
@@ -115,6 +122,8 @@ def run_command(args: argparse.Namespace) -> None:
     )
 
     provider = _resolve_provider(provider_name)
+    print(section("Provider"))
+    print(dim(provider_name))
     repo = PromptRepo()
 
     prompt_data = repo.get_version_meta(args.name, args.version)
@@ -150,16 +159,16 @@ def run_command(args: argparse.Namespace) -> None:
         missing = required_vars - set(variables.keys())
 
         if missing:
-            print("\nMissing variables (dry-run, not prompting):")
+            print(section("Missing Required Variables (dry-run)"))
             for var in sorted(missing):
-                print(f"  {var}")
+                print(dim(f"  {var}"))
 
         try:
             rendered_prompt = render_template(raw_prompt, variables)
         except Exception:
             rendered_prompt = raw_prompt  # fallback for visibility
 
-        print("\n--- Rendered Prompt ---")
+        print(section("Rendered Prompt"))
         print(rendered_prompt)
         return
 
@@ -167,7 +176,7 @@ def run_command(args: argparse.Namespace) -> None:
     # Schema-aware flow
     # -------------------------
     if schema_vars:
-        print("\nUsing schema-defined variables:")
+        print(section("Using Schema Variables"))
         interactive_vars = _collect_schema_variables(schema_vars, variables)
 
     # -------------------------
@@ -184,7 +193,7 @@ def run_command(args: argparse.Namespace) -> None:
     unused = find_unused_variables(raw_prompt, variables)
     if unused:
         unused_list = ", ".join(sorted(unused))
-        print(f"Warning: Unused variable(s): {unused_list}")
+        print(warning(f"Unused variable(s): {unused_list}"))
 
     result = provider.run(rendered_prompt)
 
@@ -197,8 +206,9 @@ def run_command(args: argparse.Namespace) -> None:
 
     tokens = result.get("tokens")
 
-    print(f"\n✓ Ran {args.name}@{args.version}")
-    print(f"\nOutput:\n{output}")
+    print(success(f"\n✓ Ran {args.name}@{args.version}"))
+    print(section("Output"))
+    print(output)
 
     if tokens is not None:
-        print(f"\nTokens: {tokens}")
+        print(dim(f"\nTokens: {tokens}"))
