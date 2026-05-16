@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Any, Dict, Optional
 
 import openai
@@ -16,24 +17,37 @@ class OpenAIProvider(BaseProvider):
 
     def run(self, prompt: str, **kwargs) -> dict:
         model = kwargs.get("model", "gpt-4o-mini")
-        timeout = kwargs.get("timeout")
-        
+        timeout = kwargs.get("timeout", 60)
+        max_tokens = kwargs.get("max_tokens")
+
         create_kwargs = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
+            "timeout": timeout,
         }
-        if timeout is not None:
-            create_kwargs["timeout"] = timeout
+        
+        if max_tokens is not None:
+            create_kwargs["max_tokens"] = max_tokens
 
-        try:
-            response = self._client.chat.completions.create(**create_kwargs)
-        except openai.OpenAIError as e:
-            raise RuntimeError(f"OpenAI API error: {e}") from e
+        retries = 2
+        for attempt in range(retries + 1):
+            try:
+                response = self._client.chat.completions.create(**create_kwargs)
+                break
+            except openai.OpenAIError as e:
+                if attempt < retries:
+                    time.sleep(0.5)
+                else:
+                    raise RuntimeError(f"OpenAI API error after {retries} retries: {e}") from e
 
-        output = response.choices[0].message.content
+        output = ""
+        if response.choices and response.choices[0].message and response.choices[0].message.content:
+            output = response.choices[0].message.content
+
         tokens = response.usage.total_tokens if response.usage else None
 
         return {
             "output": output,
             "tokens": tokens,
+            "model_used": model,
         }
