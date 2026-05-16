@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Set
 from promptvc.core.repo import PromptRepo
 from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
+from promptvc.providers.gemini import GeminiProvider
 from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.config import get_config_value
 from promptvc.utils.template import (
@@ -28,6 +29,11 @@ except ValueError:
 
 try:
     register_provider("openai", OpenAIProvider)
+except ValueError:
+    pass
+
+try:
+    register_provider("gemini", GeminiProvider)
 except ValueError:
     pass
 

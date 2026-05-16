@@ -46,7 +46,7 @@ class GeminiProvider(BaseProvider):
                     time.sleep(0.5 * (attempt + 1))
                 else:
                     raise RuntimeError(
-                        f"Gemini API failed after {retries + 1} attempts: {e}"
+                        f"Gemini API failed after {retries + 1} attempts: {str(e)}"
                     ) from e
                     
         if response is None:

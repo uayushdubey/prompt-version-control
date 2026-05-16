@@ -8,23 +8,28 @@ from promptvc.core.repo import PromptRepo
 from promptvc.utils.config import get_config_value
 from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
+from promptvc.providers.gemini import GeminiProvider
+from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.template import render_template, find_unused_variables
 
 
-_PROVIDER_REGISTRY = {
-    "mock": MockProvider,
-    "openai": OpenAIProvider,
-}
+try:
+    register_provider("mock", MockProvider)
+except ValueError:
+    pass
 
+try:
+    register_provider("openai", OpenAIProvider)
+except ValueError:
+    pass
+
+try:
+    register_provider("gemini", GeminiProvider)
+except ValueError:
+    pass
 
 def _resolve_provider(name: str):
-    provider_cls = _PROVIDER_REGISTRY.get(name)
-    if provider_cls is None:
-        available = ", ".join(_PROVIDER_REGISTRY.keys())
-        raise ValueError(
-            f"Unknown provider '{name}'. Available providers: {available}."
-        )
-    return provider_cls()
+    return get_provider(name)
 
 
 def eval_command(args: argparse.Namespace) -> None:

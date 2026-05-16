@@ -5,6 +5,8 @@ from typing import Dict, List, Optional, Set
 from promptvc.core.repo import PromptRepo
 from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
+from promptvc.providers.gemini import GeminiProvider
+from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.config import get_config_value
 from promptvc.utils.diff_apply import apply_unified_diff
 from promptvc.utils.template import render_template, find_unused_variables, extract_variables
@@ -17,20 +19,23 @@ from promptvc.utils.console import (
     dim,
 )
 
-_PROVIDER_REGISTRY = {
-    "mock": MockProvider,
-    "openai": OpenAIProvider,
-}
+try:
+    register_provider("mock", MockProvider)
+except ValueError:
+    pass
 
+try:
+    register_provider("openai", OpenAIProvider)
+except ValueError:
+    pass
+
+try:
+    register_provider("gemini", GeminiProvider)
+except ValueError:
+    pass
 
 def _resolve_provider(name: str):
-    provider_cls = _PROVIDER_REGISTRY.get(name)
-    if provider_cls is None:
-        available = ", ".join(f"'{k}'" for k in _PROVIDER_REGISTRY)
-        raise ValueError(
-            f"Provider '{name}' not found. Available providers: {available}"
-        )
-    return provider_cls()
+    return get_provider(name)
 
 
 def _parse_vars(var_args: Optional[List[str]]) -> Dict[str, str]:
