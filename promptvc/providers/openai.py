@@ -14,8 +14,7 @@ class OpenAIProvider(BaseProvider):
         if not api_key:
             raise ValueError("OPENAI_API_KEY not set")
         self._client = openai.OpenAI(api_key=api_key)
-
-    def run(self, prompt: str, **kwargs) -> dict:
+    def run(self, prompt: str, **kwargs) -> Dict[str, Any]:
         model = kwargs.get("model", "gpt-4o-mini")
         timeout = kwargs.get("timeout", 60)
         max_tokens = kwargs.get("max_tokens")
@@ -30,22 +29,33 @@ class OpenAIProvider(BaseProvider):
             create_kwargs["max_tokens"] = max_tokens
 
         retries = 2
+        response = None
         for attempt in range(retries + 1):
             try:
                 response = self._client.chat.completions.create(**create_kwargs)
                 break
             except openai.OpenAIError as e:
                 if attempt < retries:
-                    time.sleep(0.5)
+                    time.sleep(0.5 * (attempt + 1))
                 else:
-                    raise RuntimeError(f"OpenAI API error after {retries} retries: {e}") from e
-
+                    raise RuntimeError(
+                        f"OpenAI API failed after {retries + 1} attempts: {str(e)}"
+                        ) from e
+        if response is None:
+            raise RuntimeError("OpenAI API failed after retries with no response")
         output = ""
-        if response.choices and response.choices[0].message and response.choices[0].message.content:
+        if (
+            response.choices
+            and response.choices[0].message
+            and response.choices[0].message.content
+        ):
             output = response.choices[0].message.content
 
-        tokens = response.usage.total_tokens if response.usage else None
-
+        tokens = (
+            response.usage.total_tokens
+            if getattr(response, "usage", None)
+            else None
+        )
         return {
             "output": output,
             "tokens": tokens,
