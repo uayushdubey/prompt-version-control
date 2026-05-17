@@ -28,7 +28,7 @@ This is not sustainable as LLM usage matures.
 
 **Versioning.** Every prompt is stored as an immutable, timestamped version. Commits are explicit and require a message.
 
-**Execution.** Prompts can be run against a configured provider. Results are recorded alongside the version that produced them.
+**Execution.** Prompts can be run against any configured provider — cloud or local. Results are recorded alongside the version that produced them.
 
 **Evaluation.** Prompts can be tested against a structured dataset. Results are collected per case and stored for future comparison.
 
@@ -39,6 +39,10 @@ This is not sustainable as LLM usage matures.
 **Code modification.** Prompts can be applied to files via an LLM-powered apply pipeline that generates a strict unified diff, requires confirmation, and logs every change made.
 
 **Structured Inputs.** Prompts can define schemas for their inputs, enabling type-aware, self-documented, and interactive execution without hardcoding variables.
+
+**Multi-provider flexibility.** Switch between OpenAI, Gemini, Anthropic, Ollama, or a deterministic mock provider at any time — per command or globally — without changing prompt definitions.
+
+**Local LLM support.** Run prompts entirely on-device via Ollama. No API key. No network dependency. Full version control and evaluation tooling, offline.
 
 ---
 
@@ -96,6 +100,16 @@ When a schema is present:
 
 When no schema is present, the template engine falls back to extracting variables directly from `{{...}}` placeholders. Missing variables are still collected interactively.
 
+**Non-interactive mode:**
+
+In CI/CD environments where interactive input is not possible, use `--non-interactive` to fail fast if any required variables are missing rather than hanging on a prompt:
+
+```bash
+promptvc run fix_code v2 --var code="print('hi')" --non-interactive
+```
+
+If a required variable is absent and `--non-interactive` is set, the command exits with a non-zero status and a descriptive error message.
+
 **CLI override:**
 
 ```bash
@@ -111,6 +125,8 @@ There are three distinct execution modes:
 - **run** — single execution of a prompt version against a provider. Variables are resolved (from `--var`, interactively, or schema defaults) and injected into the prompt before execution. Output and token usage are recorded.
 - **eval** — batch execution of a prompt version across a structured dataset. Each input is run independently and all outputs are collected and stored.
 - **compare** — comparative evaluation of two prompt versions against the same dataset. Outputs are displayed side by side at runtime. No storage is written for compare operations.
+
+All three modes support the `--provider`, `--model`, `--timeout`, `--max-tokens`, and `--stream` runtime flags, which override global configuration on a per-invocation basis without modifying stored config.
 
 ### Evaluation System
 
@@ -135,7 +151,7 @@ The `apply` command is the core feature for prompt-driven code modification. Giv
 
 1. Loads the raw prompt text for that version.
 2. Resolves template variables from `--var` flags, schema defaults, or interactive input — before the prompt is sent to the provider.
-3. Reads the target file.
+3. Reads the target file, detecting its encoding automatically (UTF-8, UTF-16, Latin-1, and others). The detected encoding is preserved on write, preventing corruption of files that are not plain ASCII or UTF-8.
 4. Constructs a structured instruction that asks the LLM to return only a unified diff.
 5. Sends the combined input to the configured provider.
 6. Displays the proposed diff for review.
@@ -153,16 +169,43 @@ Every successful apply operation is logged to the space's storage record. Each e
 
 ### Config System
 
-Provider configuration is stored in `.promptvc/config.json`. The provider name and API key can be set via the CLI and are used as defaults for all subsequent commands. No API key is required unless a provider that needs one is invoked.
+Provider configuration is stored in `.promptvc/config.json`. The provider name, API key, and model defaults can be set via the CLI and are used as defaults for all subsequent commands. No API key is required when using the `mock` or `ollama` providers.
+
+```bash
+# Set the default provider
+promptvc config set provider openai
+
+# Set the default model for a specific provider
+promptvc config set models.openai gpt-4o
+promptvc config set models.ollama llama3
+promptvc config set models.anthropic claude-sonnet-4-20250514
+promptvc config set models.gemini gemini-1.5-pro
+
+# Set API keys per provider
+promptvc config set api_keys.openai sk-...
+promptvc config set api_keys.anthropic sk-ant-...
+promptvc config set api_keys.gemini AIza...
+```
+
+The `ollama` provider requires no API key; it connects to a locally running Ollama instance. All other cloud providers require an API key to be set before use.
 
 ### Multi-Provider Support
 
-The provider layer is abstracted behind a protocol. Current implementations:
+The provider layer is abstracted behind a common protocol. All five providers support per-command configuration of model, timeout, max tokens, and retry behavior. The structured return format is consistent across all providers: `{ "output": str, "tokens": int | None, "model_used": str }`.
 
-- **mock** — returns deterministic output, requires no API key, suitable for testing and local development.
-- **openai** — calls the OpenAI API using the configured key.
+Current implementations:
 
-New providers can be added by implementing the `run(prompt: str) -> dict` interface.
+- **mock** — returns deterministic output. Requires no API key. Suitable for testing, local development, and CI validation of prompt structure and variable resolution without incurring API costs.
+- **openai** — calls the OpenAI API using the configured key. Supports all current chat completion models.
+- **anthropic** — calls the Anthropic Messages API. Supports Claude model families. Requires an Anthropic API key.
+- **gemini** — calls the Google Gemini API. Supports Gemini 1.0 and 1.5 model families. Requires a Gemini API key.
+- **ollama** — runs prompts against a locally hosted Ollama instance. Requires no API key and no network access. Ideal for air-gapped environments, cost-sensitive workflows, or teams evaluating open-weight models. Example: `promptvc run fix v1 --provider ollama --model llama3`.
+
+New providers can be added by implementing the `run(prompt: str, **kwargs) -> dict` interface and registering them in `providers/registry.py`.
+
+**Provider resolution order** across all commands: `--provider` CLI flag → value from `config.json` → `mock`.
+
+**Per-provider model defaults** are stored in `config.json` under `models.<provider>`. The `--model` CLI flag overrides this on a per-invocation basis.
 
 ---
 
@@ -186,30 +229,46 @@ promptvc commit summarize \
 # View version history
 promptvc log summarize
 
-# Configure the provider
-promptvc config set-provider openai
-promptvc config set-api-key sk-...
+# Configure the default provider and model
+promptvc config set provider openai
+promptvc config set api_keys.openai sk-...
+promptvc config set models.openai gpt-4o
 
-# Run a single execution
+# Run a single execution with the configured provider
 promptvc run summarize v1
 
-# Run with template variables
-promptvc run fix_code v2 --var code="print('hi')" --var style=pep8
+# Run with a different provider and model on this invocation only
+promptvc run summarize v1 --provider anthropic --model claude-sonnet-4-20250514
 
-# Inspect a prompt version
+# Run with a local Ollama model, no API key required
+promptvc run summarize v1 --provider ollama --model llama3
+
+# Run with template variables and streaming output
+promptvc run fix_code v2 --var code="print('hi')" --var style=pep8 --stream
+
+# Run in non-interactive mode for CI/CD
+promptvc run fix_code v2 --var code="print('hi')" --non-interactive
+
+# Inspect a prompt version (shows variables, schema, example usage)
 promptvc inspect fix_code v2
 
 # Evaluate v1 against a dataset
 promptvc eval summarize v1 --dataset ./data/inputs.json
 
+# Evaluate with a specific model and timeout
+promptvc eval summarize v1 --dataset ./data/inputs.json --provider gemini --model gemini-1.5-pro --timeout 30
+
 # Compare v1 and v2 side by side on the same dataset
-promptvc compare summarize v1 v2 --dataset ./data/inputs.json
+promptvc compare summarize v1 v2 --dataset ./data/inputs.json --provider openai
 
 # Apply a prompt to a source file and review the diff
 promptvc apply summarize v2 --file src/main.py
 
 # Apply with template variables
 promptvc apply fix_code v2 --file src/utils.py --var style=pep8
+
+# Apply using a local model
+promptvc apply fix_code v2 --file src/utils.py --provider ollama --model codellama
 
 # View file modification history
 promptvc changes summarize
@@ -302,11 +361,17 @@ promptvc diff summarize v1 v3
 
 Execute a specific prompt version using the configured provider. Records the output and token usage.
 
-If the prompt contains template variables, any missing values are collected interactively. Provider resolution order: `--provider` flag → configured default → `mock`.
+If the prompt contains template variables, any missing values are collected interactively unless `--non-interactive` is set. Provider resolution order: `--provider` flag → configured default → `mock`.
 
 ```bash
-promptvc run summarize v2 --provider openai
+promptvc run summarize v2
+promptvc run summarize v2 --provider openai --model gpt-4o
+promptvc run summarize v2 --provider anthropic --model claude-sonnet-4-20250514
+promptvc run summarize v2 --provider gemini --model gemini-1.5-pro
+promptvc run summarize v2 --provider ollama --model llama3
 promptvc run fix_code v2 --var code="print('hi')" --var style=pep8
+promptvc run fix_code v2 --var code="print('hi')" --non-interactive
+promptvc run summarize v2 --stream --max-tokens 512 --timeout 30
 ```
 
 | Argument | Required | Description |
@@ -314,7 +379,12 @@ promptvc run fix_code v2 --var code="print('hi')" --var style=pep8
 | `name` | Yes | Prompt space name |
 | `version` | Yes | Version ID |
 | `--provider` | No | Provider name (default: configured or `mock`) |
+| `--model` | No | Model name to use for this invocation. Overrides the provider's configured default. |
+| `--timeout` | No | Request timeout in seconds |
+| `--max-tokens` | No | Maximum tokens in the provider response |
+| `--stream` | No | Stream output to the terminal as it is generated |
 | `--var` | No | Template variable in `key=value` format. Can be repeated. |
+| `--non-interactive` | No | Fail immediately if required variables are missing. Prevents interactive prompts. |
 
 ---
 
@@ -323,7 +393,9 @@ promptvc run fix_code v2 --var code="print('hi')" --var style=pep8
 Run a prompt version against a structured dataset. Each input is executed independently. Results are stored under `evaluations` in the space record.
 
 ```bash
-promptvc eval summarize v1 --dataset ./data/inputs.json --provider openai
+promptvc eval summarize v1 --dataset ./data/inputs.json
+promptvc eval summarize v1 --dataset ./data/inputs.json --provider openai --model gpt-4o
+promptvc eval summarize v1 --dataset ./data/inputs.json --provider ollama --model llama3 --timeout 60
 ```
 
 | Argument | Required | Description |
@@ -332,6 +404,10 @@ promptvc eval summarize v1 --dataset ./data/inputs.json --provider openai
 | `version` | Yes | Version ID |
 | `--dataset` | Yes | Path to dataset JSON file |
 | `--provider` | No | Provider name (default: configured or `mock`) |
+| `--model` | No | Model name to use for this invocation |
+| `--timeout` | No | Request timeout in seconds |
+| `--max-tokens` | No | Maximum tokens in the provider response |
+| `--non-interactive` | No | Fail immediately if required variables are missing |
 
 Dataset format:
 
@@ -349,7 +425,9 @@ Dataset format:
 Run two prompt versions against the same dataset and display outputs side by side. This is a runtime comparison — no records are written.
 
 ```bash
-promptvc compare summarize v1 v2 --dataset ./data/inputs.json --provider openai
+promptvc compare summarize v1 v2 --dataset ./data/inputs.json
+promptvc compare summarize v1 v2 --dataset ./data/inputs.json --provider anthropic --model claude-sonnet-4-20250514
+promptvc compare summarize v1 v2 --dataset ./data/inputs.json --provider ollama --model llama3
 ```
 
 | Argument | Required | Description |
@@ -359,18 +437,23 @@ promptvc compare summarize v1 v2 --dataset ./data/inputs.json --provider openai
 | `v2` | Yes | Second version ID |
 | `--dataset` | Yes | Path to dataset JSON file |
 | `--provider` | No | Provider name (default: configured or `mock`) |
+| `--model` | No | Model name to use for this invocation |
+| `--timeout` | No | Request timeout in seconds |
+| `--max-tokens` | No | Maximum tokens in the provider response |
 
 ---
 
 ### `promptvc apply <name> <version>`
 
-Apply a prompt version to a source file using the configured provider. The LLM returns a unified diff. The diff is displayed for review and applied only after explicit confirmation.
+Apply a prompt version to a source file using the configured provider. The LLM returns a unified diff. The diff is displayed for review and applied only after explicit confirmation. File encoding is detected automatically and preserved on write.
 
-If the prompt contains template variables, missing values are collected interactively before the provider is called. `--var` flags override interactive input.
+If the prompt contains template variables, missing values are collected interactively before the provider is called. `--var` flags override interactive input. Use `--non-interactive` to disable prompting in automated pipelines.
 
 ```bash
 promptvc apply refactor-imports v2 --file src/utils.py
 promptvc apply fix_code v2 --file src/utils.py --var style=pep8
+promptvc apply fix_code v2 --file src/utils.py --provider ollama --model codellama
+promptvc apply fix_code v2 --file src/utils.py --provider openai --model gpt-4o --non-interactive --var style=pep8
 ```
 
 | Argument | Required | Description |
@@ -379,7 +462,11 @@ promptvc apply fix_code v2 --file src/utils.py --var style=pep8
 | `version` | Yes | Version ID |
 | `--file` | Yes | Path to target file |
 | `--provider` | No | Provider name (default: configured or `mock`) |
+| `--model` | No | Model name to use for this invocation |
+| `--timeout` | No | Request timeout in seconds |
+| `--max-tokens` | No | Maximum tokens in the provider response |
 | `--var` | No | Template variable in `key=value` format. Can be repeated. |
+| `--non-interactive` | No | Fail immediately if required variables are missing |
 
 ---
 
@@ -398,14 +485,28 @@ promptvc changes refactor-imports
 Set configuration values. Stored in `.promptvc/config.json`.
 
 ```bash
-promptvc config set-provider openai
-promptvc config set-api-key sk-...
+# Set the default provider
+promptvc config set provider openai
+
+# Set a per-provider model default
+promptvc config set models.openai gpt-4o
+promptvc config set models.anthropic claude-sonnet-4-20250514
+promptvc config set models.gemini gemini-1.5-pro
+promptvc config set models.ollama llama3
+
+# Set API keys per provider
+promptvc config set api_keys.openai sk-...
+promptvc config set api_keys.anthropic sk-ant-...
+promptvc config set api_keys.gemini AIza...
 ```
+
+The `ollama` and `mock` providers require no API key.
 
 | Action | Description |
 |---|---|
-| `set-provider` | Set the default provider |
-| `set-api-key` | Set the API key for the configured provider |
+| `set provider <name>` | Set the default provider |
+| `set models.<provider> <model>` | Set the default model for a specific provider |
+| `set api_keys.<provider> <key>` | Set the API key for a specific provider |
 
 ---
 
@@ -435,6 +536,10 @@ promptvc/
   providers/
     mock.py           # Deterministic test provider
     openai.py         # OpenAI API provider
+    anthropic.py      # Anthropic Messages API provider
+    gemini.py         # Google Gemini API provider
+    ollama.py         # Local Ollama provider (no API key required)
+    registry.py       # Provider registration and resolution
   utils/
     config.py         # Config file read/write
     diff_apply.py     # Unified diff parser and patch engine
@@ -457,7 +562,7 @@ Managed by `PromptRepo`. Handles commit, retrieval, locking, and log operations.
 - `validate_variables(template, variables)` — raises `TemplateError` if any required variables are missing.
 - `render_template(template, variables)` — validates and substitutes all variables. Missing variables raise an error; extra variables are ignored with a warning.
 
-The template layer is used by both `run` and `apply` before any provider call is made.
+The template layer is used by both `run` and `apply` before any provider call is made. When `--non-interactive` is active, the layer raises immediately on missing variables rather than entering an interactive collection loop.
 
 ### Execution Layer
 
@@ -466,6 +571,8 @@ Three distinct execution paths:
 - **run** — single prompt execution via `PromptRepo.run()`. Result is appended to `runs`.
 - **eval** — batch execution via `run_evaluation()` in `core/eval.py`. Results are appended to `evaluations` via `repo.log_evaluation()`.
 - **compare** — dual batch execution via `compare_versions()` in `core/compare.py`. Runtime only; no storage writes.
+
+All three paths accept a unified provider options dict (`model`, `timeout`, `max_tokens`, `stream`) that is forwarded to the provider at call time.
 
 ### Evaluation Layer
 
@@ -477,11 +584,22 @@ Three distinct execution paths:
 
 ### Provider Layer
 
-Providers implement a single method: `run(prompt: str) -> dict`. The dict must contain an `output` key. Additional fields (`tokens`, `model`, `latency_ms`) are supported for future use. Provider resolution order across all commands: `--provider` CLI flag → value from `config.json` → `mock`.
+Providers implement a single method: `run(prompt: str, **kwargs) -> dict`. The return dict must conform to `{ "output": str, "tokens": int | None, "model_used": str }`. Additional fields are allowed for forward compatibility. All providers include retry logic with configurable backoff and structured error handling; transient failures are retried up to the configured limit before raising.
+
+Provider registration is centralized in `providers/registry.py`, which maps provider names to their implementation classes and resolves the active provider at runtime according to the override chain: `--provider` CLI flag → `config.json` default → `mock`.
+
+Each provider accepts the following kwargs at call time (all optional):
+
+| Parameter | Description |
+|---|---|
+| `model` | Model identifier to use for this call |
+| `timeout` | Request timeout in seconds |
+| `max_tokens` | Maximum tokens in the response |
+| `stream` | If `True`, stream output tokens as they are generated |
 
 ### Patch and Diff Engine
 
-`apply_unified_diff(original, diff)` in `promptvc/utils/diff_apply.py` parses a unified diff string and applies it to file content. No external libraries. Strict validation: any removal line that does not match the original raises a `ValueError`.
+`apply_unified_diff(original, diff)` in `promptvc/utils/diff_apply.py` parses a unified diff string and applies it to file content. No external libraries. Strict validation: any removal line that does not match the original raises a `ValueError`. The `apply` command wraps this function with encoding detection before reading and encoding preservation before writing, ensuring that non-UTF-8 source files (UTF-16, Latin-1, etc.) are not silently corrupted.
 
 ---
 
@@ -522,6 +640,7 @@ Each prompt space is stored as a single JSON file under `.promptvc/spaces/`:
       "version": "v1",
       "output": "...",
       "tokens": 310,
+      "model_used": "gpt-4o",
       "timestamp": "2026-01-01T10:05:00+00:00"
     }
   ],
@@ -530,8 +649,8 @@ Each prompt space is stored as a single JSON file under `.promptvc/spaces/`:
       "version": "v1",
       "dataset": "./data/inputs.json",
       "results": [
-        { "input": "...", "output": "...", "tokens": 120 },
-        { "input": "...", "output": "...", "tokens": 134 }
+        { "input": "...", "output": "...", "tokens": 120, "model_used": "gpt-4o" },
+        { "input": "...", "output": "...", "tokens": 134, "model_used": "gpt-4o" }
       ],
       "timestamp": "2026-01-01T10:10:00+00:00"
     }
@@ -547,7 +666,7 @@ Each prompt space is stored as a single JSON file under `.promptvc/spaces/`:
 }
 ```
 
-The `schema` field is optional. Versions committed before schema support was introduced will not have it; all runtime behavior falls back gracefully to template-based variable extraction.
+The `schema` field is optional. Versions committed before schema support was introduced will not have it; all runtime behavior falls back gracefully to template-based variable extraction. The `model_used` field in run and evaluation records captures the exact model identifier returned by the provider, enabling post-hoc attribution when defaults change over time.
 
 ---
 
@@ -571,11 +690,23 @@ Use `compare` to evaluate two candidate versions side by side before deciding wh
 
 ### Automated Code Modification
 
-Combine `promptvc apply` with a scripting layer to apply prompt-driven transformations across multiple files or repositories. The confirmation step can be bypassed in automated pipelines where output has already been reviewed.
+Combine `promptvc apply` with a scripting layer to apply prompt-driven transformations across multiple files or repositories. Use `--non-interactive` with pre-supplied `--var` values to run fully unattended. The confirmation step can be bypassed in automated pipelines where output has already been reviewed.
+
+### CI/CD Pipeline Integration
+
+Use `--non-interactive` across `run`, `eval`, and `apply` to ensure that any prompt missing required variables fails the pipeline immediately with a clear error rather than hanging. Combine with the `mock` provider to validate prompt structure, variable resolution, and template rendering in CI without incurring API costs.
+
+### Local and Air-Gapped Workflows
+
+Use the `ollama` provider to run the full `promptvc` feature set — including versioning, evaluation, comparison, and file apply — against locally hosted open-weight models. No network access required after model download. Useful for sensitive codebases, regulated environments, or cost-sensitive teams evaluating open-source LLMs.
+
+### Provider Benchmarking
+
+Run `compare` across the same dataset using different providers or models by changing the `--provider` and `--model` flags. Evaluate which model produces the highest-quality output for a given prompt space before committing to a provider for production use.
 
 ### Audit and Traceability
 
-Every file modification made via `apply` is stored with its version reference, diff, and timestamp. Every evaluation is stored with its dataset path and per-case results. When a question arises about why a file changed or why a prompt was changed, the records provide a complete answer without relying on Git blame or informal documentation.
+Every file modification made via `apply` is stored with its version reference, diff, and timestamp. Every evaluation is stored with its dataset path, per-case results, and the exact model used. When a question arises about why a file changed, which model produced a given output, or why a prompt was changed, the records provide a complete answer without relying on Git blame or informal documentation.
 
 ---
 
@@ -586,8 +717,8 @@ Every file modification made via `apply` is stored with its version reference, d
 - **CI integration.** Run evaluations as part of a CI pipeline, blocking promotion of a prompt version if evaluation scores fall below a defined threshold.
 - **SaaS sync.** Push and pull prompt spaces to a remote registry for team sharing and backup.
 - **Team collaboration.** Role-based access, version approval flows, and shared change history.
-- **Provider expansion.** Add support for Anthropic, Mistral, and local model runners.
 - **Git integration.** Link prompt commits to Git commits, enabling cross-referenced history between code changes and the prompts that drove them.
+- **Additional Ollama model management.** Pull, list, and switch Ollama models directly from the `promptvc` CLI without leaving the prompt workflow.
 
 ---
 
@@ -599,7 +730,12 @@ cd prompt-version-control
 pip install -e .
 ```
 
-Requires Python 3.9 or later. No external dependencies are required for the core system. The OpenAI provider requires the `openai` package.
+Requires Python 3.9 or later. No external dependencies are required for the core system or the `mock` and `ollama` providers. Cloud providers require their respective packages:
+
+- OpenAI provider: `pip install openai`
+- Anthropic provider: `pip install anthropic`
+- Gemini provider: `pip install google-generativeai`
+- Ollama provider: requires a running [Ollama](https://ollama.com) instance; no Python package dependency.
 
 ---
 
