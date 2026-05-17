@@ -54,53 +54,45 @@ def header(text: str) -> str:
 
 
 def pretty_diff(diff: str) -> str:
-    """
-    Render a unified diff with color highlighting.
-
-    - '+' additions (excluding '+++') → green
-    - '-' deletions (excluding '---') → red
-    - '@@' hunk headers → cyan
-    - file headers ('+++', '---') → dim
-    - everything else unchanged
-    """
     lines = []
 
     for line in diff.splitlines():
-        # Skip coloring for file headers
         if line.startswith("+++ ") or line.startswith("--- "):
             lines.append(_colorize(line, Color.DIM))
-
-        # Additions
         elif line.startswith("+"):
             lines.append(_colorize(line, Color.GREEN))
-
-        # Deletions
         elif line.startswith("-"):
             lines.append(_colorize(line, Color.RED))
-
-        # Hunk headers
         elif line.startswith("@@"):
             lines.append(_colorize(line, Color.CYAN, Color.BOLD))
-
         else:
             lines.append(line)
 
     return "\n".join(lines)
 
+
+def safe_print(text: str) -> None:
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        print(text.encode("ascii", "replace").decode())
+
+
 def print_success(text: str) -> None:
-    print(success(text))
+    safe_print(success(text))
 
 
 def print_error(text: str) -> None:
-    print(error(text))
+    safe_print(error(text))
 
 
 def print_warning(text: str) -> None:
-    print(warning(text))
+    safe_print(warning(text))
 
 
 def print_info(text: str) -> None:
-    print(info(text))
+    safe_print(info(text))
+
 
 def dim(text: str) -> str:
     return _colorize(text, Color.DIM)

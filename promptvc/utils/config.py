@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from promptvc.utils.console import safe_print
 
 _CONFIG_DIR = Path.home() / ".promptvc"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
@@ -27,9 +28,11 @@ def load_config() -> dict:
             with _CONFIG_FILE.open("r", encoding="utf-8") as f:
                 data = json.load(f)
                 if not isinstance(data, dict):
+                    safe_print("Warning: config file corrupted, using defaults")
                     return _DEFAULT_CONFIG.copy()
                 return data
         except (json.JSONDecodeError, OSError):
+            safe_print("Warning: config file corrupted, using defaults")
             return _DEFAULT_CONFIG.copy()
     
     # Auto-create if missing

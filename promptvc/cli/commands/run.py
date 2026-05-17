@@ -22,6 +22,7 @@ from promptvc.utils.console import (
     warning,
     section,
     dim,
+    safe_print,
 )
 
 try:
@@ -79,6 +80,7 @@ def _parse_vars(var_args: Optional[List[str]]) -> Dict[str, str]:
 def _collect_schema_variables(
     schema_vars: Dict[str, Dict],
     provided_vars: Dict[str, str],
+    is_non_interactive: bool = False,
 ) -> Dict[str, str]:
     """
     Handle schema-aware variable collection:
@@ -101,6 +103,8 @@ def _collect_schema_variables(
 
         # Ask only if required
         if required:
+            if is_non_interactive:
+                raise RuntimeError(f"Missing variables in non-interactive mode")
             value = input(dim(f"  {var_name}: ")).strip()
             collected[var_name] = value
 
@@ -108,7 +112,9 @@ def _collect_schema_variables(
 
 
 def _collect_template_variables(
-    required_vars: Set[str], provided_vars: Dict[str, str]
+    required_vars: Set[str], 
+    provided_vars: Dict[str, str],
+    is_non_interactive: bool = False,
 ) -> Dict[str, str]:
     """
     Fallback for non-schema prompts (existing behavior)
@@ -117,7 +123,10 @@ def _collect_template_variables(
     if not missing:
         return {}
 
-    print(section("Missing Variables"))
+    if is_non_interactive:
+        raise RuntimeError(f"Missing variables in non-interactive mode")
+
+    safe_print(section("Missing Variables"))
 
     collected: Dict[str, str] = {}
     for var in sorted(missing):
@@ -135,8 +144,8 @@ def run_command(args: argparse.Namespace) -> None:
     )
 
     provider = get_provider(provider_name)
-    print("\n--- Provider ---")
-    print(provider_name)
+    safe_print("\n--- Provider ---")
+    safe_print(provider_name)
 
     model = (
         getattr(args, "model", None)
@@ -146,7 +155,7 @@ def run_command(args: argparse.Namespace) -> None:
     provider_kwargs = {}
     if model:
         provider_kwargs["model"] = model
-        print(dim(f"Model: {model}"))
+        safe_print(dim(f"Model: {model}"))
 
     timeout = (
         getattr(args, "timeout", None)
@@ -180,6 +189,7 @@ def run_command(args: argparse.Namespace) -> None:
     variables = _parse_vars(getattr(args, "var", None))
 
     is_dry_run = getattr(args, "dry_run", False)
+    is_non_interactive = getattr(args, "non_interactive", False)
 
     # -------------------------
     # Determine required variables
@@ -199,31 +209,31 @@ def run_command(args: argparse.Namespace) -> None:
         missing = required_vars - set(variables.keys())
 
         if missing:
-            print(section("Missing Required Variables (dry-run)"))
+            safe_print(section("Missing Required Variables (dry-run)"))
             for var in sorted(missing):
-                print(dim(f"  {var}"))
+                safe_print(dim(f"  {var}"))
 
         try:
             rendered_prompt = render_template(raw_prompt, variables)
         except Exception:
             rendered_prompt = raw_prompt  # fallback for visibility
 
-        print(section("Rendered Prompt"))
-        print(rendered_prompt)
+        safe_print(section("Rendered Prompt"))
+        safe_print(rendered_prompt)
         return
 
     # -------------------------
     # Schema-aware flow
     # -------------------------
     if schema_vars:
-        print(section("Using Schema Variables"))
-        interactive_vars = _collect_schema_variables(schema_vars, variables)
+        safe_print(section("Using Schema Variables"))
+        interactive_vars = _collect_schema_variables(schema_vars, variables, is_non_interactive)
 
     # -------------------------
     # Fallback (no schema)
     # -------------------------
     else:
-        interactive_vars = _collect_template_variables(required_vars, variables)
+        interactive_vars = _collect_template_variables(required_vars, variables, is_non_interactive)
 
     # CLI vars override interactive/defaults
     variables = {**interactive_vars, **variables}
@@ -233,12 +243,12 @@ def run_command(args: argparse.Namespace) -> None:
     unused = find_unused_variables(raw_prompt, variables)
     if unused:
         unused_list = ", ".join(sorted(unused))
-        print(warning(f"Unused variable(s): {unused_list}"))
+        safe_print(warning(f"Unused variable(s): {unused_list}"))
 
     try:
         result = provider.run(rendered_prompt, **provider_kwargs)
     except Exception as e:
-        print(f"Error: {e}")
+        safe_print(f"Error: {e}")
         return
 
     if not isinstance(result, dict):
@@ -250,9 +260,9 @@ def run_command(args: argparse.Namespace) -> None:
 
     tokens = result.get("tokens")
 
-    print(success(f"\n✓ Ran {args.name}@{args.version}"))
-    print(section("Output"))
-    print(output)
+    safe_print(success(f"\n✓ Ran {args.name}@{args.version}"))
+    safe_print(section("Output"))
+    safe_print(output)
 
     if tokens is not None:
-        print(dim(f"\nTokens: {tokens}"))
+        safe_print(dim(f"\nTokens: {tokens}"))

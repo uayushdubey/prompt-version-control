@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import argparse
 import sys
 from typing import Callable, Dict
@@ -20,6 +23,8 @@ from promptvc.cli.commands.compare import compare_command
 
 from promptvc.core import PromptVCError
 from promptvc.core.repo import PromptRepo
+from promptvc.utils.console import safe_print
+
 
 # Type alias for all CLI command handlers
 Handler = Callable[[argparse.Namespace], None]
@@ -104,6 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Preview rendered prompt without executing",
     )
+    run_p.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Fail fast if missing variables instead of prompting interactively",
+    )
 
     # config
     config_p = subparsers.add_parser("config", help="Set configuration values")
@@ -164,6 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_p = subparsers.add_parser("inspect", help="Inspect a prompt version")
     inspect_p.add_argument("name", type=str, help="Prompt space name")
     inspect_p.add_argument("version", type=str, help="Version ID (e.g. v1)")
+    
     # apply
     apply_p = subparsers.add_parser("apply", help="Apply prompt to file")
     apply_p.add_argument("name", type=str)
@@ -201,6 +212,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Preview rendered prompt and file content without executing or applying changes",
     )
+    apply_p.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Fail fast if missing variables instead of prompting interactively",
+    )
 
     return parser
 
@@ -209,7 +225,7 @@ def handle_init(_: argparse.Namespace) -> None:
     """Handle `promptvc init` — initialize the repository."""
     repo = PromptRepo()
     repo.init_repo()
-    print("✓ Repository initialized.")
+    safe_print("✓ Repository initialized.")
 
 
 def _build_handler_map() -> Dict[str, Handler]:
@@ -244,16 +260,16 @@ def main() -> None:
         handler = _resolve_handler(args.command)
         handler(args)
     except KeyError:
-        print(f"✗ Unknown command: '{args.command}'")
+        safe_print(f"✗ Unknown command: '{args.command}'")
         sys.exit(1)
     except PromptVCError as exc:
-        print(f"✗ {exc}")
+        safe_print(f"✗ {exc}")
         sys.exit(1)
     except ValueError as exc:
-        print(f"✗ Validation error: {exc}")
+        safe_print(f"✗ Validation error: {exc}")
         sys.exit(1)
     except Exception as exc:
-        print(f"✗ Unexpected error: {exc}")
+        safe_print(f"✗ Unexpected error: {exc}")
         sys.exit(2)
 
 

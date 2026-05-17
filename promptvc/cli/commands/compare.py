@@ -13,6 +13,7 @@ from promptvc.providers.anthropic import AnthropicProvider
 from promptvc.providers.ollama import OllamaProvider
 from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.template import render_template, find_unused_variables
+from promptvc.utils.console import safe_print
 
 
 try:
@@ -49,8 +50,8 @@ def compare_command(args: argparse.Namespace) -> None:
     )
 
     provider = get_provider(provider_name)
-    print("\n--- Provider ---")
-    print(provider_name)
+    safe_print("\n--- Provider ---")
+    safe_print(provider_name)
     
     model = (
         getattr(args, "model", None)
@@ -60,7 +61,7 @@ def compare_command(args: argparse.Namespace) -> None:
     provider_kwargs = {}
     if model:
         provider_kwargs["model"] = model
-        print(f"Model: {model}")
+        safe_print(f"Model: {model}")
 
     timeout = (
         getattr(args, "timeout", None)
@@ -81,8 +82,8 @@ def compare_command(args: argparse.Namespace) -> None:
     repo = PromptRepo()
 
     # Load prompts
-    prompt_v1_data = repo.get(args.name, args.v1)
-    prompt_v2_data = repo.get(args.name, args.v2)
+    prompt_v1_data = repo.get_version_meta(args.name, args.v1)
+    prompt_v2_data = repo.get_version_meta(args.name, args.v2)
 
     if prompt_v1_data is None:
         raise ValueError(f"Prompt '{args.name}@{args.v1}' not found.")
@@ -126,18 +127,18 @@ def compare_command(args: argparse.Namespace) -> None:
 
         if unused_v1:
             unused_list = ", ".join(sorted(unused_v1))
-            print(f"Warning (case {i}, {args.v1}): Unused variable(s): {unused_list}")
+            safe_print(f"Warning (case {i}, {args.v1}): Unused variable(s): {unused_list}")
 
         if unused_v2:
             unused_list = ", ".join(sorted(unused_v2))
-            print(f"Warning (case {i}, {args.v2}): Unused variable(s): {unused_list}")
+            safe_print(f"Warning (case {i}, {args.v2}): Unused variable(s): {unused_list}")
 
         # Run both versions
         try:
             result_v1 = provider.run(rendered_v1, **provider_kwargs)
             result_v2 = provider.run(rendered_v2, **provider_kwargs)
         except Exception as e:
-            print(f"Error in case {i}: {e}")
+            safe_print(f"Error in case {i}: {e}")
             continue
         if not isinstance(result_v1, dict):
             raise ValueError(f"Invalid provider response for {args.v1} at case {i}")
@@ -155,19 +156,19 @@ def compare_command(args: argparse.Namespace) -> None:
 
     # Print results
     for i, case in enumerate(comparisons, start=1):
-        print(f"Case {i}:")
-        print(f"Input: {case.get('input')}")
-        print()
+        safe_print(f"Case {i}:")
+        safe_print(f"Input: {case.get('input')}")
+        safe_print("")
 
-        print(f"{args.v1} Output:")
-        print(case.get("v1_output"))
-        print()
+        safe_print(f"{args.v1} Output:")
+        safe_print(case.get("v1_output"))
+        safe_print("")
 
-        print(f"{args.v2} Output:")
-        print(case.get("v2_output"))
-        print()
+        safe_print(f"{args.v2} Output:")
+        safe_print(case.get("v2_output"))
+        safe_print("")
 
-        print("-" * 40)
-        print()
+        safe_print("-" * 40)
+        safe_print("")
 
-    print(f"✓ Compared {args.v1} vs {args.v2} ({len(comparisons)} cases)")
+    safe_print(f"✓ Compared {args.v1} vs {args.v2} ({len(comparisons)} cases)")

@@ -19,6 +19,7 @@ from promptvc.utils.console import (
     section,
     pretty_diff,
     dim,
+    safe_print,
 )
 
 try:
@@ -75,10 +76,11 @@ def _parse_vars(var_args: Optional[List[str]]) -> Dict[str, str]:
 def _collect_schema_variables(
     schema_vars: Dict[str, Dict],
     provided_vars: Dict[str, str],
+    is_non_interactive: bool = False,
 ) -> Dict[str, str]:
     collected: Dict[str, str] = {}
 
-    print(section("Using Schema Variables"))
+    safe_print(section("Using Schema Variables"))
 
     for var_name, spec in schema_vars.items():
         if var_name in provided_vars:
@@ -92,6 +94,8 @@ def _collect_schema_variables(
             continue
 
         if required:
+            if is_non_interactive:
+                raise RuntimeError(f"Missing variables in non-interactive mode")
             value = input(dim(f"  {var_name}: ")).strip()
             collected[var_name] = value
 
@@ -101,12 +105,16 @@ def _collect_schema_variables(
 def _collect_template_variables(
     required_vars: Set[str],
     provided_vars: Dict[str, str],
+    is_non_interactive: bool = False,
 ) -> Dict[str, str]:
     missing = required_vars - set(provided_vars.keys())
     if not missing:
         return {}
 
-    print(section("Missing Variables"))
+    if is_non_interactive:
+        raise RuntimeError(f"Missing variables in non-interactive mode")
+
+    safe_print(section("Missing Variables"))
 
     collected: Dict[str, str] = {}
     for var in sorted(missing):
@@ -116,8 +124,19 @@ def _collect_template_variables(
     return collected
 
 
+def read_file_safe(path: str) -> str:
+    for enc in ["utf-8", "utf-16", "latin-1"]:
+        try:
+            with open(path, "r", encoding=enc) as f:
+                return f.read()
+        except Exception:
+            continue
+    raise RuntimeError("Unsupported file encoding")
+
+
 def apply_command(args: argparse.Namespace) -> None:
     is_dry_run = getattr(args, "dry_run", False)
+    is_non_interactive = getattr(args, "non_interactive", False)
 
     provider_name = (
         getattr(args, "provider", None)
@@ -126,8 +145,8 @@ def apply_command(args: argparse.Namespace) -> None:
     )
 
     provider = get_provider(provider_name)
-    print("\n--- Provider ---")
-    print(provider_name)
+    safe_print("\n--- Provider ---")
+    safe_print(provider_name)
 
     model = (
         getattr(args, "model", None)
@@ -137,7 +156,7 @@ def apply_command(args: argparse.Namespace) -> None:
     provider_kwargs = {}
     if model:
         provider_kwargs["model"] = model
-        print(dim(f"Model: {model}"))
+        safe_print(dim(f"Model: {model}"))
 
     timeout = (
         getattr(args, "timeout", None)
@@ -179,47 +198,43 @@ def apply_command(args: argparse.Namespace) -> None:
     else:
         required_vars = extract_variables(raw_prompt)
 
-    try:
-        with open(args.file, "r", encoding="utf-8") as f:
-            file_content = f.read()
-    except OSError as e:
-        raise RuntimeError(f"Failed to read file '{args.file}': {e}") from e
+    file_content = read_file_safe(args.file)
 
     if is_dry_run:
         missing = required_vars - set(variables.keys())
 
         if missing:
-            print(section("Missing Required Variables (dry-run)"))
+            safe_print(section("Missing Required Variables (dry-run)"))
             for var in sorted(missing):
-                print(f"  {var}")
+                safe_print(f"  {var}")
 
         try:
             rendered_prompt = render_template(raw_prompt, variables)
         except Exception:
             rendered_prompt = raw_prompt
 
-        print(section("Rendered Prompt"))
-        print(rendered_prompt)
+        safe_print(section("Rendered Prompt"))
+        safe_print(rendered_prompt)
 
         MAX_LINES = 200
         lines = file_content.splitlines()
 
-        print(section("File Content"))
+        safe_print(section("File Content"))
         if len(lines) > MAX_LINES:
             preview = "\n".join(lines[:MAX_LINES])
-            print(preview)
-            print(f"\n... ({len(lines) - MAX_LINES} more lines)")
+            safe_print(preview)
+            safe_print(f"\n... ({len(lines) - MAX_LINES} more lines)")
         else:
-            print(file_content)
+            safe_print(file_content)
         return
 
     # -------------------------
     # Schema-aware flow
     # -------------------------
     if schema_vars:
-        interactive_vars = _collect_schema_variables(schema_vars, variables)
+        interactive_vars = _collect_schema_variables(schema_vars, variables, is_non_interactive)
     else:
-        interactive_vars = _collect_template_variables(required_vars, variables)
+        interactive_vars = _collect_template_variables(required_vars, variables, is_non_interactive)
 
     variables = {**interactive_vars, **variables}
 
@@ -228,7 +243,7 @@ def apply_command(args: argparse.Namespace) -> None:
     unused = find_unused_variables(raw_prompt, variables)
     if unused:
         unused_list = ", ".join(sorted(unused))
-        print(warning(f"Unused variable(s): {unused_list}"))
+        safe_print(warning(f"Unused variable(s): {unused_list}"))
 
     combined_input = f"""
 You are a senior software engineer.
@@ -264,7 +279,7 @@ NO_CHANGES
     try:
         result = provider.run(combined_input, **provider_kwargs)
     except Exception as e:
-        print(f"Error: {e}")
+        safe_print(f"Error: {e}")
         return
 
     if not isinstance(result, dict):
@@ -277,23 +292,29 @@ NO_CHANGES
         raise ValueError("Provider returned empty output.")
 
     if output == "NO_CHANGES":
-        print(success("No changes required."))
+        safe_print(success("No changes required."))
         return
 
     if not output.startswith("---"):
-        print(error("Invalid diff format received."))
+        safe_print(error("Invalid diff received. Raw output:"))
+        safe_print(output)
         return
 
-    print(section("Proposed Changes"))
-    print(pretty_diff(output))
+    safe_print(section("Proposed Changes"))
+    safe_print(pretty_diff(output))
 
-    answer = input(dim("\nApply changes? (y/n): ")).strip().lower()
+    if is_non_interactive:
+        answer = "y"
+    else:
+        answer = input(dim("\nApply changes? (y/n): ")).strip().lower()
 
     if answer == "y":
         try:
             new_content = apply_unified_diff(file_content, output)
         except ValueError as e:
-            print(error(f"Failed to apply diff: {e}"))
+            safe_print("Invalid diff received. Raw output:")
+            safe_print(output)
+            safe_print(error(f"Failed to apply diff: {e}"))
             return
 
         try:
@@ -309,7 +330,7 @@ NO_CHANGES
             diff=output,
         )
 
-        print(success(f"Changes applied to '{args.file}'"))
+        safe_print(success(f"Changes applied to '{args.file}'"))
 
     else:
-        print(dim("Aborted. No changes made."))
+        safe_print(dim("Aborted. No changes made."))

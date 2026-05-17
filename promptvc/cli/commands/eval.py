@@ -13,6 +13,7 @@ from promptvc.providers.anthropic import AnthropicProvider
 from promptvc.providers.ollama import OllamaProvider
 from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.template import render_template, find_unused_variables
+from promptvc.utils.console import safe_print
 
 
 try:
@@ -49,8 +50,8 @@ def eval_command(args: argparse.Namespace) -> None:
     )
 
     provider = get_provider(provider_name)
-    print("\n--- Provider ---")
-    print(provider_name)
+    safe_print("\n--- Provider ---")
+    safe_print(provider_name)
     
     model = (
         getattr(args, "model", None)
@@ -60,7 +61,7 @@ def eval_command(args: argparse.Namespace) -> None:
     provider_kwargs = {}
     if model:
         provider_kwargs["model"] = model
-        print(f"Model: {model}")
+        safe_print(f"Model: {model}")
 
     timeout = (
         getattr(args, "timeout", None)
@@ -80,8 +81,8 @@ def eval_command(args: argparse.Namespace) -> None:
 
     repo = PromptRepo()
 
-    # Load prompt
-    prompt_data = repo.get(args.name, args.version)
+    # Load prompt metadata
+    prompt_data = repo.get_version_meta(args.name, args.version)
     if prompt_data is None:
         raise ValueError(f"Prompt '{args.name}@{args.version}' not found.")
 
@@ -115,13 +116,13 @@ def eval_command(args: argparse.Namespace) -> None:
         unused = find_unused_variables(raw_prompt, variables)
         if unused:
             unused_list = ", ".join(sorted(unused))
-            print(f"Warning (case {i}): Unused variable(s): {unused_list}")
+            safe_print(f"Warning (case {i}): Unused variable(s): {unused_list}")
 
         # Run provider
         try:
             result = provider.run(rendered_prompt, **provider_kwargs)
         except Exception as e:
-            print(f"Error in case {i}: {e}")
+            safe_print(f"Error in case {i}: {e}")
             continue
 
         if not isinstance(result, dict):
@@ -138,11 +139,11 @@ def eval_command(args: argparse.Namespace) -> None:
 
     # Print results
     for i, case in enumerate(results, start=1):
-        print(f"Case {i}:")
-        print(f"  Input:  {case.get('input')}")
-        print(f"  Output: {case.get('output')}")
-        print(f"  Tokens: {case.get('tokens')}")
-        print()
+        safe_print(f"Case {i}:")
+        safe_print(f"  Input:  {case.get('input')}")
+        safe_print(f"  Output: {case.get('output')}")
+        safe_print(f"  Tokens: {case.get('tokens')}")
+        safe_print("")
 
     # Store evaluation
     repo.log_evaluation(
@@ -152,4 +153,4 @@ def eval_command(args: argparse.Namespace) -> None:
         results=results,
     )
 
-    print(f"✓ Evaluation completed ({len(results)} cases)")
+    safe_print(f"✓ Evaluation completed ({len(results)} cases)")
