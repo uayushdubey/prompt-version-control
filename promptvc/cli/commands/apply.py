@@ -6,6 +6,8 @@ from promptvc.core.repo import PromptRepo
 from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
 from promptvc.providers.gemini import GeminiProvider
+from promptvc.providers.anthropic import AnthropicProvider
+from promptvc.providers.ollama import OllamaProvider
 from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.config import get_config_value
 from promptvc.utils.diff_apply import apply_unified_diff
@@ -34,8 +36,15 @@ try:
 except ValueError:
     pass
 
-def _resolve_provider(name: str):
-    return get_provider(name)
+try:
+    register_provider("anthropic", AnthropicProvider)
+except ValueError:
+    pass
+
+try:
+    register_provider("ollama", OllamaProvider)
+except ValueError:
+    pass
 
 
 def _parse_vars(var_args: Optional[List[str]]) -> Dict[str, str]:
@@ -116,9 +125,9 @@ def apply_command(args: argparse.Namespace) -> None:
         or "mock"
     )
 
-    provider = _resolve_provider(provider_name)
-    print(section("Provider"))
-    print(dim(provider_name))
+    provider = get_provider(provider_name)
+    print("\n--- Provider ---")
+    print(provider_name)
 
     repo = PromptRepo()
     prompt_data = repo.get_version_meta(args.name, args.version)
@@ -226,15 +235,16 @@ If no changes are needed, return:
 NO_CHANGES
 """
 
-    result = provider.run(combined_input)
+    try:
+        result = provider.run(combined_input)
+    except Exception as e:
+        print(f"Error: {e}")
+        return
 
     if not isinstance(result, dict):
         raise ValueError("Provider returned invalid response format.")
 
-    output = result.get("output")
-    if output is None:
-        raise ValueError("Provider returned no output.")
-
+    output = result.get("output") or ""
     output = output.strip()
 
     if not output:

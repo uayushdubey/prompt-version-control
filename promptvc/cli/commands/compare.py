@@ -10,6 +10,7 @@ from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
 from promptvc.providers.gemini import GeminiProvider
 from promptvc.providers.anthropic import AnthropicProvider
+from promptvc.providers.ollama import OllamaProvider
 from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.template import render_template, find_unused_variables
 
@@ -31,6 +32,11 @@ except ValueError:
 
 try:
     register_provider("anthropic", AnthropicProvider)
+except ValueError:
+    pass
+
+try:
+    register_provider("ollama", OllamaProvider)
 except ValueError:
     pass
 
@@ -112,8 +118,8 @@ def compare_command(args: argparse.Namespace) -> None:
         if not isinstance(result_v2, dict):
             raise ValueError(f"Invalid provider response for {args.v2} at case {i}")
 
-        output_v1 = result_v1.get("output")
-        output_v2 = result_v2.get("output")
+        output_v1 = result_v1.get("output") or ""
+        output_v2 = result_v2.get("output") or ""
 
         comparisons.append({
             "input": row,

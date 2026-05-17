@@ -10,6 +10,7 @@ from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
 from promptvc.providers.gemini import GeminiProvider
 from promptvc.providers.anthropic import AnthropicProvider
+from promptvc.providers.ollama import OllamaProvider
 from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.template import render_template, find_unused_variables
 
@@ -31,6 +32,11 @@ except ValueError:
 
 try:
     register_provider("anthropic", AnthropicProvider)
+except ValueError:
+    pass
+
+try:
+    register_provider("ollama", OllamaProvider)
 except ValueError:
     pass
 
