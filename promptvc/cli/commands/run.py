@@ -142,9 +142,21 @@ def run_command(args: argparse.Namespace) -> None:
         getattr(args, "model", None)
         or get_config_value(f"models.{provider_name}")
     )
-    if model:
-        print(dim(f"Model: {model}"))
     
+    provider_kwargs = {}
+    if model:
+        provider_kwargs["model"] = model
+        print(dim(f"Model: {model}"))
+
+    if getattr(args, "timeout", None):
+        provider_kwargs["timeout"] = args.timeout
+
+    if getattr(args, "max_tokens", None):
+        provider_kwargs["max_tokens"] = args.max_tokens
+
+    if getattr(args, "stream", False):
+        provider_kwargs["stream"] = True
+
     repo = PromptRepo()
 
     prompt_data = repo.get_version_meta(args.name, args.version)
@@ -217,7 +229,7 @@ def run_command(args: argparse.Namespace) -> None:
         print(warning(f"Unused variable(s): {unused_list}"))
 
     try:
-        result = provider.run(rendered_prompt, model=model)
+        result = provider.run(rendered_prompt, **provider_kwargs)
     except Exception as e:
         print(f"Error: {e}")
         return

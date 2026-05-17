@@ -56,8 +56,20 @@ def compare_command(args: argparse.Namespace) -> None:
         getattr(args, "model", None)
         or get_config_value(f"models.{provider_name}")
     )
+    
+    provider_kwargs = {}
     if model:
+        provider_kwargs["model"] = model
         print(f"Model: {model}")
+
+    if getattr(args, "timeout", None):
+        provider_kwargs["timeout"] = args.timeout
+
+    if getattr(args, "max_tokens", None):
+        provider_kwargs["max_tokens"] = args.max_tokens
+
+    if getattr(args, "stream", False):
+        provider_kwargs["stream"] = True
 
     repo = PromptRepo()
 
@@ -115,8 +127,8 @@ def compare_command(args: argparse.Namespace) -> None:
 
         # Run both versions
         try:
-            result_v1 = provider.run(rendered_v1, model=model)
-            result_v2 = provider.run(rendered_v2, model=model)
+            result_v1 = provider.run(rendered_v1, **provider_kwargs)
+            result_v2 = provider.run(rendered_v2, **provider_kwargs)
         except Exception as e:
             print(f"Error in case {i}: {e}")
             continue

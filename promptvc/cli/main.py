@@ -83,6 +83,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Provider to use (overrides config if set)",
     )
     run_p.add_argument(
+        "--model", type=str, help="Model to use"
+    )
+    run_p.add_argument(
+        "--timeout", type=int, help="Timeout in seconds"
+    )
+    run_p.add_argument(
+        "--max-tokens", type=int, help="Max tokens"
+    )
+    run_p.add_argument(
+        "--stream", action="store_true", help="Stream output"
+    )
+    run_p.add_argument(
         "--var",
         action="append",
         help="Template variable (key=value). Can be repeated. Overrides schema/default values.",
@@ -123,6 +135,10 @@ def build_parser() -> argparse.ArgumentParser:
     eval_p.add_argument("version", type=str, help="Version ID (e.g. v1)")
     eval_p.add_argument("--dataset", type=str, required=True, help="Path to dataset JSON file")
     eval_p.add_argument("--provider", type=str, default=None, help="Provider to use (optional)")
+    eval_p.add_argument("--model", type=str, help="Model to use")
+    eval_p.add_argument("--timeout", type=int, help="Timeout in seconds")
+    eval_p.add_argument("--max-tokens", type=int, help="Max tokens")
+    eval_p.add_argument("--stream", action="store_true", help="Stream output")
 
     # compare
     compare_p = subparsers.add_parser("compare", help="Compare two prompt versions on a dataset")
@@ -131,6 +147,10 @@ def build_parser() -> argparse.ArgumentParser:
     compare_p.add_argument("v2", type=str, help="Second version ID")
     compare_p.add_argument("--dataset", type=str, required=True, help="Path to dataset JSON file")
     compare_p.add_argument("--provider", type=str, default=None, help="Provider to use (optional)")
+    compare_p.add_argument("--model", type=str, help="Model to use")
+    compare_p.add_argument("--timeout", type=int, help="Timeout in seconds")
+    compare_p.add_argument("--max-tokens", type=int, help="Max tokens")
+    compare_p.add_argument("--stream", action="store_true", help="Stream output")
 
     # inspect
     inspect_p = subparsers.add_parser("inspect", help="Inspect a prompt version")
@@ -150,6 +170,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Provider to use (overrides config if set)",
+    )
+    apply_p.add_argument(
+        "--model", type=str, help="Model to use"
+    )
+    apply_p.add_argument(
+        "--timeout", type=int, help="Timeout in seconds"
+    )
+    apply_p.add_argument(
+        "--max-tokens", type=int, help="Max tokens"
+    )
+    apply_p.add_argument(
+        "--stream", action="store_true", help="Stream output"
     )
     apply_p.add_argument(
         "--var",

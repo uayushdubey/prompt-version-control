@@ -56,8 +56,20 @@ def eval_command(args: argparse.Namespace) -> None:
         getattr(args, "model", None)
         or get_config_value(f"models.{provider_name}")
     )
+    
+    provider_kwargs = {}
     if model:
+        provider_kwargs["model"] = model
         print(f"Model: {model}")
+
+    if getattr(args, "timeout", None):
+        provider_kwargs["timeout"] = args.timeout
+
+    if getattr(args, "max_tokens", None):
+        provider_kwargs["max_tokens"] = args.max_tokens
+
+    if getattr(args, "stream", False):
+        provider_kwargs["stream"] = True
 
     repo = PromptRepo()
 
@@ -100,7 +112,7 @@ def eval_command(args: argparse.Namespace) -> None:
 
         # Run provider
         try:
-            result = provider.run(rendered_prompt, model=model)
+            result = provider.run(rendered_prompt, **provider_kwargs)
         except Exception as e:
             print(f"Error in case {i}: {e}")
             continue
