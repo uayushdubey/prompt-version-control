@@ -35,22 +35,26 @@ class AnthropicProvider(BaseProvider):
             try:
                 response = self._client.messages.create(**create_kwargs)
                 break
-            except anthropic.APIError as e:
+            except Exception as e:
                 if attempt < retries:
                     time.sleep(0.5 * (attempt + 1))
                 else:
-                    raise RuntimeError(f"Anthropic API failed after retries: {e}") from e
+                    raise RuntimeError(f"Anthropic API failed after {retries + 1} attempts: {e}") from e
                     
         if response is None:
             raise RuntimeError("Anthropic API failed after retries with no response")
 
         output = ""
-        if getattr(response, "content", None):
-            output = response.content[0].text
-
+        if getattr(response, "content", None) and len(response.content) > 0:
+            for block in response.content:
+                if hasattr(block, "text") and block.text:
+                    output = block.text
+                    break
         tokens = None
         if getattr(response, "usage", None):
-            tokens = getattr(response.usage, "input_tokens", 0) + getattr(response.usage, "output_tokens", 0)
+            input_tokens = getattr(response.usage, "input_tokens", 0)
+            output_tokens = getattr(response.usage, "output_tokens", 0)
+            tokens = input_tokens + output_tokens
 
         return {
             "output": output,
