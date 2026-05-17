@@ -43,6 +43,8 @@ def eval_command(args: argparse.Namespace) -> None:
     )
 
     provider = get_provider(provider_name)
+    print("\n--- Provider ---")
+    print(provider_name)
     repo = PromptRepo()
 
     # Load prompt
@@ -83,16 +85,20 @@ def eval_command(args: argparse.Namespace) -> None:
             print(f"Warning (case {i}): Unused variable(s): {unused_list}")
 
         # Run provider
-        result = provider.run(rendered_prompt)
+        try:
+            result = provider.run(rendered_prompt)
+        except Exception as e:
+            print(f"Error in case {i}: {e}")
+            continue
 
         if not isinstance(result, dict):
             raise ValueError(f"Invalid provider response at case {i}")
 
-        output = result.get("output")
+        output = result.get("output") or ""
         tokens = result.get("tokens")
 
         results.append({
-            "input": row.get("input"),
+            "input": row,
             "output": output,
             "tokens": tokens,
         })
