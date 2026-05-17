@@ -9,6 +9,7 @@ from promptvc.utils.config import get_config_value
 from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
 from promptvc.providers.gemini import GeminiProvider
+from promptvc.providers.anthropic import AnthropicProvider
 from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.template import render_template, find_unused_variables
 
@@ -28,8 +29,10 @@ try:
 except ValueError:
     pass
 
-def _resolve_provider(name: str):
-    return get_provider(name)
+try:
+    register_provider("anthropic", AnthropicProvider)
+except ValueError:
+    pass
 
 
 def compare_command(args: argparse.Namespace) -> None:
@@ -39,7 +42,10 @@ def compare_command(args: argparse.Namespace) -> None:
         or "mock"
     )
 
-    provider = _resolve_provider(provider_name)
+    provider = get_provider(provider_name)
+    print("\n--- Provider ---")
+    print(provider_name)
+    
     repo = PromptRepo()
 
     # Load prompts
@@ -95,9 +101,12 @@ def compare_command(args: argparse.Namespace) -> None:
             print(f"Warning (case {i}, {args.v2}): Unused variable(s): {unused_list}")
 
         # Run both versions
-        result_v1 = provider.run(rendered_v1)
-        result_v2 = provider.run(rendered_v2)
-
+        try:
+            result_v1 = provider.run(rendered_v1)
+            result_v2 = provider.run(rendered_v2)
+        except Exception as e:
+            print(f"Error in case {i}: {e}")
+            continue
         if not isinstance(result_v1, dict):
             raise ValueError(f"Invalid provider response for {args.v1} at case {i}")
         if not isinstance(result_v2, dict):
@@ -107,7 +116,7 @@ def compare_command(args: argparse.Namespace) -> None:
         output_v2 = result_v2.get("output")
 
         comparisons.append({
-            "input": row.get("input"),
+            "input": row,
             "v1_output": output_v1,
             "v2_output": output_v2,
         })

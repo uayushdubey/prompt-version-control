@@ -9,6 +9,7 @@ from promptvc.utils.config import get_config_value
 from promptvc.providers.mock import MockProvider
 from promptvc.providers.openai import OpenAIProvider
 from promptvc.providers.gemini import GeminiProvider
+from promptvc.providers.anthropic import AnthropicProvider
 from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.template import render_template, find_unused_variables
 
@@ -28,8 +29,10 @@ try:
 except ValueError:
     pass
 
-def _resolve_provider(name: str):
-    return get_provider(name)
+try:
+    register_provider("anthropic", AnthropicProvider)
+except ValueError:
+    pass
 
 
 def eval_command(args: argparse.Namespace) -> None:
@@ -39,7 +42,7 @@ def eval_command(args: argparse.Namespace) -> None:
         or "mock"
     )
 
-    provider = _resolve_provider(provider_name)
+    provider = get_provider(provider_name)
     repo = PromptRepo()
 
     # Load prompt
