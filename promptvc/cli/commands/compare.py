@@ -52,6 +52,13 @@ def compare_command(args: argparse.Namespace) -> None:
     print("\n--- Provider ---")
     print(provider_name)
     
+    model = (
+        getattr(args, "model", None)
+        or get_config_value(f"models.{provider_name}")
+    )
+    if model:
+        print(f"Model: {model}")
+
     repo = PromptRepo()
 
     # Load prompts
@@ -108,8 +115,8 @@ def compare_command(args: argparse.Namespace) -> None:
 
         # Run both versions
         try:
-            result_v1 = provider.run(rendered_v1)
-            result_v2 = provider.run(rendered_v2)
+            result_v1 = provider.run(rendered_v1, model=model)
+            result_v2 = provider.run(rendered_v2, model=model)
         except Exception as e:
             print(f"Error in case {i}: {e}")
             continue

@@ -51,6 +51,14 @@ def eval_command(args: argparse.Namespace) -> None:
     provider = get_provider(provider_name)
     print("\n--- Provider ---")
     print(provider_name)
+    
+    model = (
+        getattr(args, "model", None)
+        or get_config_value(f"models.{provider_name}")
+    )
+    if model:
+        print(f"Model: {model}")
+
     repo = PromptRepo()
 
     # Load prompt
@@ -92,7 +100,7 @@ def eval_command(args: argparse.Namespace) -> None:
 
         # Run provider
         try:
-            result = provider.run(rendered_prompt)
+            result = provider.run(rendered_prompt, model=model)
         except Exception as e:
             print(f"Error in case {i}: {e}")
             continue

@@ -129,6 +129,13 @@ def apply_command(args: argparse.Namespace) -> None:
     print("\n--- Provider ---")
     print(provider_name)
 
+    model = (
+        getattr(args, "model", None)
+        or get_config_value(f"models.{provider_name}")
+    )
+    if model:
+        print(dim(f"Model: {model}"))
+
     repo = PromptRepo()
     prompt_data = repo.get_version_meta(args.name, args.version)
 
@@ -236,7 +243,7 @@ NO_CHANGES
 """
 
     try:
-        result = provider.run(combined_input)
+        result = provider.run(combined_input, model=model)
     except Exception as e:
         print(f"Error: {e}")
         return
