@@ -16,7 +16,8 @@ _DEFAULT_CONFIG = {
         "ollama": "llama3"
     },
     "defaults": {
-        "timeout": 60
+        "timeout": 60,
+        "max_tokens": None
     }
 }
 
@@ -61,3 +62,6 @@ def set_config_value(key: str, value: Any) -> None:
         current = current[k]
     current[keys[-1]] = value
     save_config(config)
+
+def list_config() -> dict:
+    return load_config()

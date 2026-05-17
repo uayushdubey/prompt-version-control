@@ -2,19 +2,40 @@ from __future__ import annotations
 
 import argparse
 import json
-from promptvc.utils.config import get_config_value, set_config_value, load_config
+from typing import Any
+from promptvc.utils.config import get_config_value, set_config_value, list_config
+
+def _parse_value(val: str) -> Any:
+    lower_val = val.lower()
+    if lower_val == "true":
+        return True
+    if lower_val == "false":
+        return False
+    if lower_val == "null":
+        return None
+    try:
+        return int(val)
+    except ValueError:
+        pass
+    try:
+        return float(val)
+    except ValueError:
+        pass
+    return val
 
 def config_command(args: argparse.Namespace) -> None:
     action = getattr(args, "action", None)
     
     if action == "set":
         key = getattr(args, "key", None)
-        value = getattr(args, "value", None)
-        if not key or value is None:
+        value_raw = getattr(args, "value", None)
+        if not key or value_raw is None:
             print("Error: 'set' requires <key> and <value>")
             return
-        set_config_value(key, value)
-        print(f"Set {key} = {value}")
+        
+        parsed_value = _parse_value(value_raw)
+        set_config_value(key, parsed_value)
+        print(f"Set {key} = {parsed_value}")
         
     elif action == "get":
         key = getattr(args, "key", None)
@@ -31,7 +52,7 @@ def config_command(args: argparse.Namespace) -> None:
                 print(val)
                 
     elif action == "list":
-        config = load_config()
+        config = list_config()
         print(json.dumps(config, indent=2))
     else:
         print("Unknown config action. Use set, get, or list.")

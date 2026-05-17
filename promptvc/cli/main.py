@@ -110,11 +110,19 @@ def build_parser() -> argparse.ArgumentParser:
     config_p.add_argument(
         "action",
         type=str,
-        help="Config action (e.g. set-provider, set-api-key)",
+        choices=["set", "get", "list"],
+        help="Config action",
+    )
+    config_p.add_argument(
+        "key",
+        type=str,
+        nargs="?",
+        help="Config key",
     )
     config_p.add_argument(
         "value",
         type=str,
+        nargs="?",
         help="Value to set",
     )
 

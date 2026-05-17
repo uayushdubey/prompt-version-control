@@ -139,13 +139,20 @@ def apply_command(args: argparse.Namespace) -> None:
         provider_kwargs["model"] = model
         print(dim(f"Model: {model}"))
 
-    if getattr(args, "timeout", None):
-        provider_kwargs["timeout"] = args.timeout
+    timeout = (
+        getattr(args, "timeout", None)
+        or get_config_value("defaults.timeout")
+    )
 
-    if getattr(args, "max_tokens", None):
-        provider_kwargs["max_tokens"] = args.max_tokens
+    if timeout:
+        provider_kwargs["timeout"] = timeout
 
-    if getattr(args, "stream", False):
+    max_tokens = getattr(args, "max_tokens", None)
+    if max_tokens:
+        provider_kwargs["max_tokens"] = max_tokens
+
+    stream = getattr(args, "stream", False)
+    if stream:
         provider_kwargs["stream"] = True
 
     repo = PromptRepo()
