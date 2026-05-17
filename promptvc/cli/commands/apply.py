@@ -124,11 +124,11 @@ def _collect_template_variables(
     return collected
 
 
-def read_file_safe(path: str) -> str:
+def read_file_safe(path: str) -> tuple[str, str]:
     for enc in ["utf-8", "utf-16", "latin-1"]:
         try:
             with open(path, "r", encoding=enc) as f:
-                return f.read()
+                return f.read(), enc
         except Exception:
             continue
     raise RuntimeError("Unsupported file encoding")
@@ -198,7 +198,7 @@ def apply_command(args: argparse.Namespace) -> None:
     else:
         required_vars = extract_variables(raw_prompt)
 
-    file_content = read_file_safe(args.file)
+    file_content, encoding = read_file_safe(args.file)
 
     if is_dry_run:
         missing = required_vars - set(variables.keys())
@@ -318,7 +318,7 @@ NO_CHANGES
             return
 
         try:
-            with open(args.file, "w", encoding="utf-8") as f:
+            with open(args.file, "w", encoding=encoding) as f:
                 f.write(new_content)
         except OSError as e:
             raise RuntimeError(f"Failed to write file '{args.file}': {e}") from e

@@ -71,6 +71,14 @@ def pretty_diff(diff: str) -> str:
     return "\n".join(lines)
 
 
+def get_symbol(success: bool = True) -> str:
+    try:
+        "✓".encode("utf-8")
+        return "✓" if success else "✗"
+    except Exception:
+        return "[OK]" if success else "[ERR]"
+
+
 def safe_print(text: str) -> None:
     try:
         print(text)
