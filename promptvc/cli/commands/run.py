@@ -136,8 +136,17 @@ def run_command(args: argparse.Namespace) -> None:
 
     repo = PromptRepo()
 
+    # Resolve 'latest' alias
+    version = args.version
+    if version.lower() == "latest":
+        try:
+            space   = repo.storage.load_space(args.name)
+            version = space.get("latest") or version
+        except Exception:
+            pass
+
     try:
-        prompt_data = repo.get_version_meta(args.name, args.version)
+        prompt_data = repo.get_version_meta(args.name, version)
     except Exception:
         print_error_panel(
             f"Prompt version not found: '{args.name} @ {args.version}'",
@@ -147,10 +156,10 @@ def run_command(args: argparse.Namespace) -> None:
 
     raw_prompt = prompt_data.get("prompt")
     if raw_prompt is None:
-        print_error_panel(f"'{args.name}@{args.version}' has no prompt text.")
+        print_error_panel(f"'{args.name}@{version}' has no prompt text.")
         return
 
-    schema = repo.get_schema(args.name, args.version)
+    schema = repo.get_schema(args.name, version)
     schema_vars = schema.get("variables", {}) if schema else {}
 
     variables = _parse_vars(getattr(args, "var", None))
@@ -219,7 +228,7 @@ def run_command(args: argparse.Namespace) -> None:
     # ── Execute ───────────────────────────────────────────────────────────────
     t_start = time.monotonic()
     try:
-        with spinner(f"Running {args.name} @ {args.version} via {provider_name}…"):
+        with spinner(f"Running {args.name} @ {version} via {provider_name}…"):
             result = provider.run(rendered_prompt, **provider_kwargs)
     except Exception as exc:
         print_error_panel(
@@ -256,22 +265,19 @@ def run_command(args: argparse.Namespace) -> None:
 
     # ── Persist ───────────────────────────────────────────────────────────────
     try:
-        space = repo.storage.load_space(args.name)
         run_record = {
-            "version": args.version,
-            "output": output,
-            "tokens": tokens,
+            "version":      version,
+            "output":       output,
+            "tokens":       tokens,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "latency_ms": round(latency_ms),
-            "cost_usd": cost,
-            "model_used": model_used,
-            "timestamp": repo._utc_now_iso(),
+            "latency_ms":   round(latency_ms),
+            "cost_usd":     cost,
+            "model_used":   model_used,
+            "timestamp":    repo._utc_now_iso(),
         }
-        if "runs" not in space:
-            space["runs"] = []
-        space["runs"].append(run_record)
-        repo.storage.save_space(args.name, space)
+        # Use append_run for validated, atomic storage
+        repo.storage.append_run(args.name, run_record)
     except Exception:
         pass  # never fail a run due to storage error
 
@@ -290,7 +296,7 @@ def run_command(args: argparse.Namespace) -> None:
     ]
     safe_print()
     from promptvc.utils.console import print_box, Color
-    print_box(f"{args.name} @ {args.version}", info_lines)
+    print_box(f"{args.name} @ {version}", info_lines)
 
     safe_print()
     safe_print(dim("── Output ───────────────────────────────────────────"))

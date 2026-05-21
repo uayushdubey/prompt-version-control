@@ -331,9 +331,19 @@ class StorageEngine:
         return f"v{next_num}"
 
     def list_space_names(self) -> List[str]:
-        """Return the names of all persisted prompt spaces."""
+        """Return the names of all persisted prompt spaces (skips malformed files)."""
         self._ensure_initialized()
-        return [f.stem for f in self._root.glob("*.json")]
+        names = []
+        for f in self._root.glob("*.json"):
+            try:
+                with f.open("r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                # Only include files that look like a prompt space
+                if isinstance(data, dict) and "versions" in data:
+                    names.append(f.stem)
+            except Exception:
+                pass
+        return sorted(names)
 
     # -------------------------
     # Helpers

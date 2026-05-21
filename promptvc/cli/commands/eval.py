@@ -60,18 +60,27 @@ def eval_command(args: argparse.Namespace) -> None:
 
     repo = PromptRepo()
 
+    # Resolve 'latest' alias
+    version = args.version
+    if version.lower() == "latest":
+        try:
+            space   = repo.storage.load_space(args.name)
+            version = space.get("latest") or version
+        except Exception:
+            pass
+
     try:
-        prompt_data = repo.get_version_meta(args.name, args.version)
+        prompt_data = repo.get_version_meta(args.name, version)
     except Exception:
         print_error_panel(
-            f"Prompt '{args.name} @ {args.version}' not found.",
+            f"Prompt '{args.name} @ {version}' not found.",
             hint_cmd=f"promptvc log {args.name}",
         )
         return
 
     raw_prompt = prompt_data.get("prompt")
     if raw_prompt is None:
-        print_error_panel(f"'{args.name}@{args.version}' has no prompt text.")
+        print_error_panel(f"'{args.name}@{version}' has no prompt text.")
         return
 
     try:
@@ -183,7 +192,7 @@ def eval_command(args: argparse.Namespace) -> None:
     # ── Store evaluation ──────────────────────────────────────────────────────
     repo.log_evaluation(
         name=args.name,
-        version=args.version,
+        version=version,
         dataset=args.dataset,
         results=results,
     )

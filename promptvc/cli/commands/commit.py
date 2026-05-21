@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from promptvc.cli.utils import get_repo, require_arg
+from promptvc.utils.console import safe_print, success, warning, dim, bold, _colorize, Color
 
 
 def handle(args: argparse.Namespace) -> None:
@@ -15,7 +16,7 @@ def handle(args: argparse.Namespace) -> None:
     if name is None:
         return
 
-    prompt = _resolve("prompt", getattr(args, "prompt", None), "Enter prompt:")
+    prompt = _resolve("prompt", getattr(args, "prompt", None), "Enter prompt text:")
     if prompt is None:
         return
 
@@ -24,36 +25,37 @@ def handle(args: argparse.Namespace) -> None:
         return
 
     result = repo.commit(name, prompt, message)
-    print(f"\n✓ Committed {result['id']}  [{result['tokens']} tokens]")
-    print(f"Message: {result['message']}")
+
+    safe_print()
+    safe_print(success(f"✓ Committed {result['id']}"))
+    safe_print(dim(f"  Space   : {name}"))
+    safe_print(dim(f"  Message : {result['message']}"))
+    safe_print(dim(f"  Tokens  : {result['tokens']}"))
+    safe_print(dim(f"  Hash    : {result['hash'][:16]}…"))
+    safe_print()
+    safe_print(_colorize(
+        f"  Run it: promptvc run {name} {result['id']}",
+        Color.CYAN,
+    ))
+    safe_print()
 
 
 def _resolve(field: str, value: str | None, prompt_label: str) -> str | None:
-    """
-    Return value if provided, otherwise prompt interactively.
-
-    Returns None if the value is empty or input is aborted.
-    """
     if value and value.strip():
         return value.strip()
     return _read_input(field, prompt_label)
 
 
 def _read_input(field: str, prompt_label: str) -> str | None:
-    """
-    Prompt user for non-empty input.
-
-    Returns None on empty input, EOF, or keyboard interrupt.
-    """
-    print(f"\n{prompt_label}")
+    safe_print(f"\n  {prompt_label}")
     try:
-        value = input("> ").strip()
+        value = input(dim("  > ")).strip()
     except (EOFError, KeyboardInterrupt):
-        print(f"\n✗ Input cancelled.")
+        safe_print(warning("\n  Input cancelled."))
         return None
 
     if not value:
-        print(f"✗ {field} cannot be empty. Please try again.")
+        safe_print(warning(f"  ✗ {field} cannot be empty."))
         return None
 
     return value

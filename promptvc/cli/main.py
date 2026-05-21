@@ -26,6 +26,7 @@ from promptvc.cli.commands.shell import shell_command
 from promptvc.cli.commands.pipe import pipe_command
 
 from promptvc.core import PromptVCError
+from promptvc.core.lock import LockError
 from promptvc.core.repo import PromptRepo
 from promptvc.utils.console import safe_print, print_error_panel, success, _colorize, Color
 
@@ -249,6 +250,9 @@ def main() -> None:
         )
         sys.exit(1)
     except PromptVCError as exc:
+        print_error_panel(str(exc))
+        sys.exit(1)
+    except LockError as exc:
         print_error_panel(str(exc))
         sys.exit(1)
     except ValueError as exc:
