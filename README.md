@@ -363,7 +363,104 @@ $ promptvc test run summarize v2 --suite tests/summarize_suite.json --provider o
 
 ---
 
-## 7. Architecture Overview
+## 7. Programmatic API (Python Usage)
+
+While `promptvc` provides a comprehensive CLI, the underlying execution engine can be imported directly into Python applications. This allows you to programmatically manage prompt repositories, render templates, integrate mock or custom API providers, track metrics, and run unit tests.
+
+### Initializing and Loading the Repository
+
+To programmatically interact with a promptvc repository:
+
+```python
+from promptvc.core import PromptRepo
+
+# Initialize repository. By default, it manages the local `.promptvc` directory.
+repo = PromptRepo()
+repo.init_repo()
+```
+
+### Registering and Accessing Prompts
+
+You can commit new prompt versions and retrieve existing ones programmatically:
+
+```python
+# Commit a prompt template with an optional validation schema
+meta = repo.commit(
+    name="translator",
+    prompt="Translate this text to {{language}}: {{text}}",
+    message="v1 initial translation prompt",
+    schema={
+        "variables": {
+            "language": {"type": "string", "required": True},
+            "text": {"type": "string", "required": True}
+        }
+    }
+)
+
+# Retrieve raw prompt templates (returns a string)
+prompt_template = repo.get("translator", "v1")
+
+# Fetch latest version metadata
+latest_meta = repo.latest("translator")
+```
+
+### Template Rendering
+
+Render prompt templates by replacing template variables manually using the built-in renderer:
+
+```python
+from promptvc.utils.template import render_template
+
+variables = {
+    "language": "French",
+    "text": "Hello, world!"
+}
+rendered = render_template(prompt_template, variables)
+# Outputs: "Translate this text to French: Hello, world!"
+```
+
+### Running Prompts Programmatically
+
+You can run prompts using registered providers (like `OpenAIProvider`, `AnthropicProvider`, `GeminiProvider`, or `MockProvider`):
+
+```python
+from promptvc.providers.mock import MockProvider
+
+provider = MockProvider()
+run_result = provider.run(rendered)
+
+# Save execution run telemetry to registry logs
+repo.storage.append_run("translator", {
+    "version": "v1",
+    "output": run_result["output"],
+    "tokens": run_result["tokens"],
+    "timestamp": repo._utc_now_iso()
+})
+```
+
+### Comparing Versions & Locking
+
+You can programmatically compute prompt diffs and prevent modifications by locking stable prompt versions:
+
+```python
+from promptvc.core.diff import compute_diff, format_diff
+
+# Compare token differences
+token_diff = repo.token_diff("translator", "v1", "v2")
+
+# Generate diff patch lines
+diff_lines = compute_diff("Hello world", "Hello beautiful world")
+print(format_diff(diff_lines))
+
+# Lock a version to prevent overwrite or deletion
+repo.lock("translator", "v1")
+```
+
+See [examples/api_usage.py](file:///d:/prompt-version-control/examples/api_usage.py) for a complete runnable demonstration.
+
+---
+
+## 8. Architecture Overview
 
 ### Component Diagram
 
@@ -406,7 +503,7 @@ $ promptvc test run summarize v2 --suite tests/summarize_suite.json --provider o
 
 ---
 
-## 8. Execution Model
+## 9. Execution Model
 
 ### Run vs. Eval vs. Compare
 
@@ -422,7 +519,7 @@ The provider layer extracts token telemetry (prompt tokens, response tokens, and
 
 ---
 
-## 9. Developer Experience
+## 10. Developer Experience
 
 ### Reproducibility
 Every prompt commit includes a unique SHA-256 hash. Because files are versioned locally in a declarative format, developers can replicate model inputs at any point by pulling historical commits.
@@ -435,7 +532,7 @@ The `mock` provider returns reversed prompt buffers. This enables developers to 
 
 ---
 
-## 10. Comparison with Existing Tools
+## 11. Comparison with Existing Tools
 
 | Metric | promptvc | LangSmith / W&B | OpenAI Evals | Basic Scripting |
 |---|---|---|---|---|
@@ -447,7 +544,7 @@ The `mock` provider returns reversed prompt buffers. This enables developers to 
 
 ---
 
-## 11. Use Cases
+## 12. Use Cases
 
 ### Automated Pre-Commit Assertions
 Run prompt assertion suites locally on every git commit. If output Jaccard similarity drifts past defined thresholds, block commits to enforce prompt stability.
@@ -460,7 +557,7 @@ Apply prompt patches to multi-file directory structures in batches to clean up d
 
 ---
 
-## 12. Stability and Reliability
+## 13. Stability and Reliability
 
 The codebase incorporates several checks to ensure reliability in production environments:
 * **Transactional Serialization:** Database writes write first to a temporary file before renaming it to replace the target. This ensures that space registries are not corrupted if the process crashes mid-write.
@@ -470,7 +567,7 @@ The codebase incorporates several checks to ensure reliability in production env
 
 ---
 
-## 13. Installation and Quick Start
+## 14. Installation and Quick Start
 
 ### Installation
 Clone the repository and perform an editable installation using pip:
@@ -495,7 +592,7 @@ $ promptvc config set models.openai "gpt-4o-mini"
 
 ---
 
-## 14. Roadmap
+## 15. Roadmap
 
 * **LLM-As-A-Judge Evaluations:** Add validation steps that call external model evaluators.
 * **Remote Registry Sync:** Implement commands to push and pull prompt spaces to cloud systems (PostgreSQL, S3) to support team environments.
