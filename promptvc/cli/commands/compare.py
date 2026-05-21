@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from typing import Dict, Any
+import time
+from typing import Any, Dict
 
 from promptvc.core.repo import PromptRepo
 from promptvc.utils.config import get_config_value
@@ -13,33 +14,22 @@ from promptvc.providers.anthropic import AnthropicProvider
 from promptvc.providers.ollama import OllamaProvider
 from promptvc.providers.registry import register_provider, get_provider
 from promptvc.utils.template import render_template, find_unused_variables
-from promptvc.utils.console import safe_print
+from promptvc.utils.console import (
+    safe_print, print_table, print_box, badge,
+    success, warning, dim, bold, spinner, print_error_panel,
+    pretty_diff, Color, _colorize,
+)
+from promptvc.utils.cost import estimate_cost, format_cost, format_latency
 
-
-try:
-    register_provider("mock", MockProvider)
-except ValueError:
-    pass
-
-try:
-    register_provider("openai", OpenAIProvider)
-except ValueError:
-    pass
-
-try:
-    register_provider("gemini", GeminiProvider)
-except ValueError:
-    pass
-
-try:
-    register_provider("anthropic", AnthropicProvider)
-except ValueError:
-    pass
-
-try:
-    register_provider("ollama", OllamaProvider)
-except ValueError:
-    pass
+for _name, _cls in [
+    ("mock", MockProvider), ("openai", OpenAIProvider),
+    ("gemini", GeminiProvider), ("anthropic", AnthropicProvider),
+    ("ollama", OllamaProvider),
+]:
+    try:
+        register_provider(_name, _cls)
+    except ValueError:
+        pass
 
 
 def compare_command(args: argparse.Namespace) -> None:
@@ -48,26 +38,17 @@ def compare_command(args: argparse.Namespace) -> None:
         or get_config_value("provider")
         or "mock"
     )
-
     provider = get_provider(provider_name)
-    safe_print("\n--- Provider ---")
-    safe_print(provider_name)
-    
+
     model = (
         getattr(args, "model", None)
         or get_config_value(f"models.{provider_name}")
     )
-    
-    provider_kwargs = {}
+    provider_kwargs: Dict = {}
     if model:
         provider_kwargs["model"] = model
-        safe_print(f"Model: {model}")
 
-    timeout = (
-        getattr(args, "timeout", None)
-        or get_config_value("defaults.timeout")
-    )
-
+    timeout = getattr(args, "timeout", None) or get_config_value("defaults.timeout")
     if timeout:
         provider_kwargs["timeout"] = timeout
 
@@ -75,100 +56,129 @@ def compare_command(args: argparse.Namespace) -> None:
     if max_tokens:
         provider_kwargs["max_tokens"] = max_tokens
 
-    stream = getattr(args, "stream", False)
-    if stream:
+    if getattr(args, "stream", False):
         provider_kwargs["stream"] = True
 
     repo = PromptRepo()
 
-    # Load prompts
-    prompt_v1_data = repo.get_version_meta(args.name, args.v1)
-    prompt_v2_data = repo.get_version_meta(args.name, args.v2)
+    for ver in [args.v1, args.v2]:
+        try:
+            repo.get_version_meta(args.name, ver)
+        except Exception:
+            print_error_panel(
+                f"Version '{args.name} @ {ver}' not found.",
+                hint_cmd=f"promptvc log {args.name}",
+            )
+            return
 
-    if prompt_v1_data is None:
-        raise ValueError(f"Prompt '{args.name}@{args.v1}' not found.")
-    if prompt_v2_data is None:
-        raise ValueError(f"Prompt '{args.name}@{args.v2}' not found.")
+    prompt_v1 = repo.get_version_meta(args.name, args.v1).get("prompt", "")
+    prompt_v2 = repo.get_version_meta(args.name, args.v2).get("prompt", "")
 
-    prompt_v1 = prompt_v1_data.get("prompt")
-    prompt_v2 = prompt_v2_data.get("prompt")
-
-    if prompt_v1 is None:
-        raise ValueError(f"Prompt '{args.name}@{args.v1}' has no 'prompt' field.")
-    if prompt_v2 is None:
-        raise ValueError(f"Prompt '{args.name}@{args.v2}' has no 'prompt' field.")
-
-    # Load dataset
     try:
         with open(args.dataset, "r", encoding="utf-8") as f:
             dataset = json.load(f)
-    except Exception as e:
-        raise RuntimeError(f"Failed to load dataset: {e}") from e
+    except Exception as exc:
+        print_error_panel(f"Failed to load dataset: {exc}")
+        return
 
     if not isinstance(dataset, list):
-        raise ValueError("Dataset must be a list of objects.")
+        print_error_panel("Dataset must be a JSON array.")
+        return
+
+    safe_print()
+    safe_print(bold(f"  Comparing {args.name}: {args.v1} vs {args.v2}"))
+    safe_print(dim(f"  Provider : {provider_name}" + (f" / {model}" if model else "")))
+    safe_print(dim(f"  Dataset  : {args.dataset}  ({len(dataset)} cases)"))
+    safe_print()
 
     comparisons = []
-
-    # Run comparison loop
     for i, row in enumerate(dataset, start=1):
         if not isinstance(row, dict):
-            raise ValueError(f"Dataset row {i} is not an object.")
+            safe_print(warning(f"  ⚠  Skipping row {i}: not a JSON object"))
+            continue
 
         variables: Dict[str, Any] = row
 
-        # Render both prompts
-        rendered_v1 = render_template(prompt_v1, variables)
-        rendered_v2 = render_template(prompt_v2, variables)
-
-        # Warn unused variables (non-blocking)
-        unused_v1 = find_unused_variables(prompt_v1, variables)
-        unused_v2 = find_unused_variables(prompt_v2, variables)
-
-        if unused_v1:
-            unused_list = ", ".join(sorted(unused_v1))
-            safe_print(f"Warning (case {i}, {args.v1}): Unused variable(s): {unused_list}")
-
-        if unused_v2:
-            unused_list = ", ".join(sorted(unused_v2))
-            safe_print(f"Warning (case {i}, {args.v2}): Unused variable(s): {unused_list}")
-
-        # Run both versions
         try:
-            result_v1 = provider.run(rendered_v1, **provider_kwargs)
-            result_v2 = provider.run(rendered_v2, **provider_kwargs)
-        except Exception as e:
-            safe_print(f"Error in case {i}: {e}")
+            rendered_v1 = render_template(prompt_v1, variables)
+            rendered_v2 = render_template(prompt_v2, variables)
+        except Exception as exc:
+            safe_print(warning(f"  ⚠  Row {i} template error: {exc}"))
             continue
-        if not isinstance(result_v1, dict):
-            raise ValueError(f"Invalid provider response for {args.v1} at case {i}")
-        if not isinstance(result_v2, dict):
-            raise ValueError(f"Invalid provider response for {args.v2} at case {i}")
 
-        output_v1 = result_v1.get("output") or ""
-        output_v2 = result_v2.get("output") or ""
+        try:
+            with spinner(f"  [{i}/{len(dataset)}] Running case {i} ({args.v1})…"):
+                t0 = time.monotonic()
+                result_v1 = provider.run(rendered_v1, **provider_kwargs)
+                lat_v1 = (time.monotonic() - t0) * 1000
+
+            with spinner(f"  [{i}/{len(dataset)}] Running case {i} ({args.v2})…"):
+                t0 = time.monotonic()
+                result_v2 = provider.run(rendered_v2, **provider_kwargs)
+                lat_v2 = (time.monotonic() - t0) * 1000
+        except Exception as exc:
+            safe_print(warning(f"  ✗  Case {i} failed: {exc}"))
+            continue
+
+        out_v1 = result_v1.get("output") or ""
+        out_v2 = result_v2.get("output") or ""
+        tok_v1 = result_v1.get("tokens")
+        tok_v2 = result_v2.get("tokens")
 
         comparisons.append({
-            "input": row,
-            "v1_output": output_v1,
-            "v2_output": output_v2,
+            "case":    i,
+            "input":   row,
+            "v1_output":   out_v1,
+            "v2_output":   out_v2,
+            "v1_tokens":   tok_v1,
+            "v2_tokens":   tok_v2,
+            "v1_latency":  round(lat_v1),
+            "v2_latency":  round(lat_v2),
         })
 
-    # Print results
-    for i, case in enumerate(comparisons, start=1):
-        safe_print(f"Case {i}:")
-        safe_print(f"Input: {case.get('input')}")
-        safe_print("")
+    if not comparisons:
+        print_error_panel("No comparison results. Check dataset and provider.")
+        return
 
-        safe_print(f"{args.v1} Output:")
-        safe_print(case.get("v1_output"))
-        safe_print("")
+    # ── Summary table ──────────────────────────────────────────────────────────
+    headers = ["#", f"{args.v1} tokens", f"{args.v1} latency",
+               f"{args.v2} tokens", f"{args.v2} latency", "Δ tokens"]
+    rows = []
+    for c in comparisons:
+        t1 = c["v1_tokens"] or 0
+        t2 = c["v2_tokens"] or 0
+        delta = t2 - t1
+        delta_str = (f"+{delta}" if delta > 0 else str(delta)) if (t1 and t2) else "—"
+        rows.append([
+            str(c["case"]),
+            str(c["v1_tokens"] or "—"),
+            format_latency(c["v1_latency"]),
+            str(c["v2_tokens"] or "—"),
+            format_latency(c["v2_latency"]),
+            delta_str,
+        ])
 
-        safe_print(f"{args.v2} Output:")
-        safe_print(case.get("v2_output"))
-        safe_print("")
+    safe_print()
+    print_table(headers, rows, title=f"Compare: {args.name}  {args.v1} vs {args.v2}")
 
-        safe_print("-" * 40)
-        safe_print("")
+    # ── Per-case outputs ───────────────────────────────────────────────────────
+    safe_print()
+    for c in comparisons:
+        safe_print(_colorize(f"  ── Case {c['case']} ──────────────────────────────", Color.DIM))
+        input_preview = str(c["input"])[:120]
+        safe_print(dim(f"  Input: {input_preview}"))
+        safe_print()
 
-    safe_print(f"✓ Compared {args.v1} vs {args.v2} ({len(comparisons)} cases)")
+        v1_label = _colorize(f"  {args.v1}", Color.BOLD_CYAN)
+        v2_label = _colorize(f"  {args.v2}", Color.BOLD_MAGENTA)
+        safe_print(v1_label)
+        for line in (c["v1_output"] or "").splitlines()[:10]:
+            safe_print(f"    {line}")
+
+        safe_print()
+        safe_print(v2_label)
+        for line in (c["v2_output"] or "").splitlines()[:10]:
+            safe_print(f"    {line}")
+        safe_print()
+
+    safe_print(success(f"✓ Compared {args.v1} vs {args.v2}  ({len(comparisons)} cases)"))
