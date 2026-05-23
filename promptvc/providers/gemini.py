@@ -35,20 +35,16 @@ class GeminiProvider(BaseProvider):
                 max_output_tokens=max_tokens
             )
 
-        retries = 2
-        response = None
-        for attempt in range(retries + 1):
-            try:
-                response = model.generate_content(prompt, **generate_kwargs)
-                break
-            except Exception as e:
-                if attempt < retries:
-                    time.sleep(0.5 * (attempt + 1))
-                else:
-                    raise RuntimeError(
-                        f"Gemini API failed after {retries + 1} attempts: {str(e)}"
-                    ) from e
-                    
+        try:
+            response = self._retry_with_backoff(
+                lambda: model.generate_content(prompt, **generate_kwargs),
+                transient_exceptions=(Exception,),
+                max_retries=2,
+                base_delay=0.5,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Gemini API failed: {str(e)}") from e
+
         if response is None:
             raise RuntimeError("Gemini API failed after retries with no response")
         output = ""
@@ -60,8 +56,19 @@ class GeminiProvider(BaseProvider):
             except Exception:
                 output = ""
 
+        tokens = None
+        input_tokens = None
+        output_tokens = None
+        if response and hasattr(response, "usage_metadata") and response.usage_metadata:
+            tokens = getattr(response.usage_metadata, "total_token_count", None)
+            input_tokens = getattr(response.usage_metadata, "prompt_token_count", None)
+            output_tokens = getattr(response.usage_metadata, "candidates_token_count", None)
+
         return {
             "output": output,
-            "tokens": None,
+            "tokens": tokens,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "model_used": model_name,
         }
+

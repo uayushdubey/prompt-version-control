@@ -29,17 +29,16 @@ class AnthropicProvider(BaseProvider):
         if timeout is not None:
             create_kwargs["timeout"] = timeout
 
-        retries = 2
-        response = None
-        for attempt in range(retries + 1):
-            try:
-                response = self._client.messages.create(**create_kwargs)
-                break
-            except Exception as e:
-                if attempt < retries:
-                    time.sleep(0.5 * (attempt + 1))
-                else:
-                    raise RuntimeError(f"Anthropic API failed after {retries + 1} attempts: {e}") from e
+        try:
+            response = self._retry_with_backoff(
+                lambda: self._client.messages.create(**create_kwargs),
+                transient_exceptions=(Exception,),
+                max_retries=2,
+                base_delay=0.5,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Anthropic API failed: {e}") from e
+
                     
         if response is None:
             raise RuntimeError("Anthropic API failed after retries with no response")

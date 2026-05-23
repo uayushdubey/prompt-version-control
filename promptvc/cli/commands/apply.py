@@ -116,6 +116,13 @@ If no changes are needed, return exactly: NO_CHANGES
         safe_print(output[:500])
         return False
 
+    import hashlib
+    diff_hash = hashlib.sha256(f"{os.path.abspath(file_path)}:{output}".encode("utf-8")).hexdigest()
+
+    if repo.storage.is_diff_applied(file_path, diff_hash):
+        safe_print(dim(f"  This diff has already been applied to '{file_path}'. Skipping."))
+        return False
+
     safe_print()
     safe_print(bold(f"  Proposed changes for: {file_path}"))
     safe_print(pretty_diff(output))
@@ -139,12 +146,36 @@ If no changes are needed, return exactly: NO_CHANGES
         )
         return False
 
+    import shutil
+    backup_path = file_path + ".promptvc.bak"
+
+    try:
+        shutil.copy2(file_path, backup_path)
+    except Exception as exc:
+        print_error_panel(f"Failed to create backup of '{file_path}': {exc}")
+        return False
+
     try:
         with open(file_path, "w", encoding=encoding) as f:
             f.write(new_content)
     except OSError as exc:
-        print_error_panel(f"Failed to write '{file_path}': {exc}")
+        print_error_panel(f"Failed to write '{file_path}': {exc}. Rolling back changes.")
+        try:
+            shutil.copy2(backup_path, file_path)
+        except Exception as roll_exc:
+            print_error_panel(f"CRITICAL: Failed to rollback from backup file: {roll_exc}")
         return False
+    finally:
+        if os.path.exists(backup_path):
+            try:
+                os.remove(backup_path)
+            except Exception:
+                pass
+
+    try:
+        repo.storage.record_applied_diff(file_path, diff_hash)
+    except Exception as exc:
+        safe_print(warning(f"⚠ Warning: Failed to record applied diff hash: {exc}"))
 
     repo.log_file_change(
         name=args.name,
@@ -154,6 +185,7 @@ If no changes are needed, return exactly: NO_CHANGES
     )
     safe_print(success(f"  ✓ Applied to '{file_path}'"))
     return True
+
 
 
 def apply_command(args: argparse.Namespace) -> None:

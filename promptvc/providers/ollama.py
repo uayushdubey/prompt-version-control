@@ -20,25 +20,20 @@ class OllamaProvider(BaseProvider):
             "stream": stream
         }
 
-        retries = 2
-        response = None
-
-        for attempt in range(retries + 1):
-            try:
-                response = requests.post(self.base_url, json=payload, timeout=timeout)
-                response.raise_for_status()
-                break
-            except requests.exceptions.ConnectionError as e:
-                if attempt < retries:
-                    time.sleep(0.5 * (attempt + 1))
-                else:
-                    raise RuntimeError("Ollama is not running. Start with: ollama serve") from e
-            except requests.exceptions.RequestException as e:
-                if attempt < retries:
-                    time.sleep(0.5 * (attempt + 1))
-                else:
-                    raise RuntimeError(
-                        f"Ollama API failed: {e}. Make sure model '{model}' is installed (run: ollama pull {model})") from e
+        try:
+            response = self._retry_with_backoff(
+                lambda: requests.post(self.base_url, json=payload, timeout=timeout),
+                transient_exceptions=(requests.exceptions.RequestException,),
+                max_retries=2,
+                base_delay=0.5,
+            )
+            response.raise_for_status()
+        except requests.exceptions.ConnectionError as e:
+            raise RuntimeError("Ollama is not running. Start with: ollama serve") from e
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(
+                f"Ollama API failed: {e}. Make sure model '{model}' is installed (run: ollama pull {model})"
+            ) from e
 
         if response is None:
             raise RuntimeError("Ollama API failed after retries with no response")
@@ -54,8 +49,15 @@ class OllamaProvider(BaseProvider):
 
         if "error" in response_json:
             raise RuntimeError(f"Ollama error: {response_json['error']}")
+
+        prompt_tokens = response_json.get("prompt_eval_count", 0)
+        eval_tokens = response_json.get("eval_count", 0)
+        tokens = prompt_tokens + eval_tokens if (prompt_tokens or eval_tokens) else None
+
         return {
             "output": output,
-            "tokens": None,
+            "tokens": tokens,
+            "input_tokens": prompt_tokens if prompt_tokens else None,
+            "output_tokens": eval_tokens if eval_tokens else None,
             "model_used": model,
         }

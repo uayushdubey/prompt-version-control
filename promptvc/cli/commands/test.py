@@ -25,6 +25,78 @@ from promptvc.utils.console import (
 
 # ── test run ──────────────────────────────────────────────────────────────────
 
+def _run_test_suite_internal(
+    suite: list,
+    raw_prompt: str,
+    provider,
+    provider_kwargs: dict,
+    golden_dir: str,
+    args: argparse.Namespace,
+    version_label: str,
+    silent: bool = False
+) -> list[CaseResult]:
+    case_results = []
+    for i, case in enumerate(suite, start=1):
+        case_id   = case.get("id", f"case-{i}")
+        input_vars = case.get("input", {})
+
+        # Render prompt
+        try:
+            rendered = render_template(raw_prompt, input_vars)
+        except Exception as exc:
+            if not silent:
+                safe_print(warning(f"  ⚠  {case_id} ({version_label}): template error — {exc}"))
+            continue
+
+        # Run
+        try:
+            if not silent:
+                with spinner(f"  [{i}/{len(suite)}] {case_id} ({version_label})…"):
+                    result = provider.run(rendered, **provider_kwargs)
+            else:
+                result = provider.run(rendered, **provider_kwargs)
+        except Exception as exc:
+            if not silent:
+                safe_print(warning(f"  ✗  {case_id} ({version_label}): provider failed — {exc}"))
+            continue
+
+        output = result.get("output") or ""
+        tokens = result.get("tokens")
+
+        deterministic = getattr(args, "deterministic", False)
+        cr = run_case_assertions(
+            case,
+            output,
+            tokens,
+            golden_dir,
+            provider=provider,
+            deterministic=deterministic,
+        )
+        case_results.append(cr)
+
+        if not silent:
+            if cr.passed:
+                safe_print(_colorize(f"  ✓  {case_id} ({version_label})  (Score: {cr.score:.2f})", Color.BOLD_GREEN))
+            else:
+                safe_print(_colorize(f"  ✗  {case_id} ({version_label})  (Score: {cr.score:.2f})", Color.BOLD_RED))
+                for a in cr.failed_assertions:
+                    safe_print(dim(f"       [assertion: {a.assertion_type}] {a.message}"))
+                    if a.expected:
+                        safe_print(dim(f"         expected: {a.expected}"))
+                    if a.actual:
+                        safe_print(dim(f"         actual  : {a.actual}"))
+                for c in cr.failed_checks:
+                    safe_print(dim(f"       [check: {c.check_type}] {c.message}"))
+                    if c.expected:
+                        safe_print(dim(f"         expected: {c.expected}"))
+                    if c.actual:
+                        safe_print(dim(f"         actual  : {c.actual}"))
+                if cr.score_feedback:
+                    safe_print(dim(f"       [feedback] {cr.score_feedback.strip()}"))
+
+    return case_results
+
+
 def test_run_command(args: argparse.Namespace) -> None:
     """Run a test suite against a prompt version."""
     provider_name = (
@@ -67,135 +139,179 @@ def test_run_command(args: argparse.Namespace) -> None:
 
     golden_dir = os.path.dirname(os.path.abspath(suite_path))
 
+    # Check if regression comparison is requested
+    compare_version = getattr(args, "compare", None)
+
     safe_print()
-    safe_print(bold(f"  promptvc test  ·  {args.name} @ {args.version}"))
+    safe_print(bold(f"  promptvc test  ·  {args.name} @ {args.version}" + (f" (comparing to {compare_version})" if compare_version else "")))
     safe_print(dim(f"  Suite    : {suite_path}  ({len(suite)} cases)"))
     safe_print(dim(f"  Provider : {provider_name}" + (f" / {model}" if model else "")))
     safe_print()
 
-    case_results: list[CaseResult] = []
-    failed_count = 0
+    # Run current version
+    current_results = _run_test_suite_internal(
+        suite, raw_prompt, provider, provider_kwargs, golden_dir, args, version_label=args.version, silent=False
+    )
 
-    for i, case in enumerate(suite, start=1):
-        case_id   = case.get("id", f"case-{i}")
-        input_vars = case.get("input", {})
-
-        # Render prompt
+    if compare_version:
         try:
-            rendered = render_template(raw_prompt, input_vars)
-        except Exception as exc:
-            safe_print(warning(f"  ⚠  {case_id}: template error — {exc}"))
-            continue
+            compare_data = repo.get_version_meta(args.name, compare_version)
+        except Exception:
+            print_error_panel(
+                f"Comparison prompt '{args.name} @ {compare_version}' not found.",
+                hint_cmd=f"promptvc log {args.name}",
+            )
+            sys.exit(1)
+        raw_prompt_compare = compare_data.get("prompt", "")
 
-        # Run
-        try:
-            with spinner(f"  [{i}/{len(suite)}] {case_id}…"):
-                result = provider.run(rendered, **provider_kwargs)
-        except Exception as exc:
-            safe_print(warning(f"  ✗  {case_id}: provider failed — {exc}"))
-            continue
-
-        output = result.get("output") or ""
-        tokens = result.get("tokens")
-
-        deterministic = getattr(args, "deterministic", False)
-        cr = run_case_assertions(
-            case,
-            output,
-            tokens,
-            golden_dir,
-            provider=provider,
-            deterministic=deterministic,
+        # Run comparison version silently
+        base_results = _run_test_suite_internal(
+            suite, raw_prompt_compare, provider, provider_kwargs, golden_dir, args, version_label=compare_version, silent=True
         )
-        case_results.append(cr)
 
-        if cr.passed:
-            safe_print(_colorize(f"  ✓  {case_id}  (Score: {cr.score:.2f})", Color.BOLD_GREEN))
+        current_by_id = {cr.case_id: cr for cr in current_results}
+        base_by_id = {cr.case_id: cr for cr in base_results}
+
+        headers = ["Case", f"Score ({compare_version})", f"Score ({args.version})", "Delta", "Result"]
+        rows = []
+        regression_detected = False
+
+        for case_id in sorted(set(current_by_id.keys()) | set(base_by_id.keys())):
+            base_cr = base_by_id.get(case_id)
+            curr_cr = current_by_id.get(case_id)
+
+            base_score = base_cr.score if base_cr else 0.0
+            curr_score = curr_cr.score if curr_cr else 0.0
+            delta = curr_score - base_score
+
+            if delta > 0.001:
+                delta_str = _colorize(f"+{delta:.2f}", Color.BOLD_GREEN)
+            elif delta < -0.001:
+                delta_str = _colorize(f"{delta:.2f}", Color.BOLD_RED)
+                regression_detected = True
+            else:
+                delta_str = "0.00"
+
+            if not curr_cr:
+                res_label = _colorize("MISSING", Color.BOLD_RED)
+            elif curr_cr.passed:
+                res_label = _colorize("PASS", Color.BOLD_GREEN)
+            else:
+                res_label = _colorize("FAIL", Color.BOLD_RED)
+
+            rows.append([
+                case_id,
+                f"{base_score:.2f}",
+                f"{curr_score:.2f}",
+                delta_str,
+                res_label
+            ])
+
+        print_table(headers, rows, title=f"Regression Report: {compare_version} -> {args.version}")
+
+        base_avg = sum(cr.score for cr in base_results) / len(base_results) if base_results else 0.0
+        curr_avg = sum(cr.score for cr in current_results) / len(current_results) if current_results else 0.0
+        avg_delta = curr_avg - base_avg
+
+        summary_lines = [
+            badge(f"Avg Score ({compare_version})", f"{base_avg:.2f}"),
+            badge(f"Avg Score ({args.version})", f"{curr_avg:.2f}"),
+            badge("Avg Delta", f"{avg_delta:+.2f}"),
+        ]
+
+        failed = False
+        fail_reasons = []
+        if regression_detected:
+            failed = True
+            fail_reasons.append("Regression detected: one or more test cases had score drops.")
+
+        if curr_avg < base_avg - 0.001:
+            failed = True
+            fail_reasons.append("Regression detected: average score dropped.")
+
+        threshold = getattr(args, "threshold", None)
+        if threshold is not None:
+            threshold = float(threshold)
+            if curr_avg < threshold:
+                failed = True
+                fail_reasons.append(f"Average score {curr_avg:.2f} is below threshold {threshold:.2f}")
+
+        safe_print()
+        if not failed:
+            print_box("No regressions detected ✓", summary_lines)
+            safe_print(success("\n✓ Test suite complete"))
         else:
-            failed_count += 1
-            safe_print(_colorize(f"  ✗  {case_id}  (Score: {cr.score:.2f})", Color.BOLD_RED))
-            for a in cr.failed_assertions:
-                safe_print(dim(f"       [assertion: {a.assertion_type}] {a.message}"))
-                if a.expected:
-                    safe_print(dim(f"         expected: {a.expected}"))
-                if a.actual:
-                    safe_print(dim(f"         actual  : {a.actual}"))
-            for c in cr.failed_checks:
-                safe_print(dim(f"       [check: {c.check_type}] {c.message}"))
-                if c.expected:
-                    safe_print(dim(f"         expected: {c.expected}"))
-                if c.actual:
-                    safe_print(dim(f"         actual  : {c.actual}"))
-            if cr.score_feedback:
-                safe_print(dim(f"       [feedback] {cr.score_feedback.strip()}"))
-
-    # ── Summary ────────────────────────────────────────────────────────────────
-    safe_print()
-    total_assertions = sum(len(cr.assertions) for cr in case_results)
-    passed_assertions = sum(
-        sum(1 for a in cr.assertions if a.passed) for cr in case_results
-    )
-    total_checks = sum(len(cr.checks) for cr in case_results)
-    passed_checks = sum(
-        sum(1 for c in cr.checks if c.passed) for cr in case_results
-    )
-    passed_cases  = sum(1 for cr in case_results if cr.passed)
-    total_cases   = len(case_results)
-    avg_score     = sum(cr.score for cr in case_results) / total_cases if total_cases > 0 else 0.0
-
-    headers = ["Case", "Assertions", "Checks", "Score", "Result"]
-    rows = []
-    for cr in case_results:
-        total_a  = len(cr.assertions)
-        passed_a = sum(1 for a in cr.assertions if a.passed)
-        total_c  = len(cr.checks)
-        passed_c = sum(1 for c in cr.checks if c.passed)
-        result_label = (
-            _colorize("PASS", Color.BOLD_GREEN)
-            if cr.passed
-            else _colorize("FAIL", Color.BOLD_RED)
-        )
-        rows.append([
-            cr.case_id,
-            f"{passed_a}/{total_a}",
-            f"{passed_c}/{total_c}",
-            f"{cr.score:.2f}",
-            result_label
-        ])
-
-    print_table(headers, rows, title="Test Results")
-
-    summary_lines = [
-        badge("Cases     ", f"{passed_cases}/{total_cases} passed"),
-        badge("Assertions", f"{passed_assertions}/{total_assertions} passed"),
-        badge("Checks    ", f"{passed_checks}/{total_checks} passed"),
-        badge("Avg Score ", f"{avg_score:.2f}"),
-    ]
-    
-    threshold = getattr(args, "threshold", None)
-    if threshold is not None:
-        threshold = float(threshold)
-
-    failed = False
-    fail_reasons = []
-
-    if passed_cases < total_cases:
-        failed = True
-        fail_reasons.append(f"{total_cases - passed_cases} case(s) failed assertions or checks")
-
-    if threshold is not None and avg_score < threshold:
-        failed = True
-        fail_reasons.append(f"Average score {avg_score:.2f} is below threshold {threshold:.2f}")
-
-    safe_print()
-    if not failed:
-        print_box("All tests passed ✓", summary_lines)
-        safe_print(success("\n✓ Test suite complete"))
+            print_box("Regression / test failures detected", summary_lines, color=Color.BOLD_RED)
+            for reason in fail_reasons:
+                safe_print(_colorize(f"\n✗ {reason}", Color.BOLD_RED))
+            sys.exit(1)
     else:
-        print_box("Test suite failed", summary_lines, color=Color.BOLD_RED)
-        for reason in fail_reasons:
-            safe_print(_colorize(f"\n✗ {reason}", Color.BOLD_RED))
-        sys.exit(1)
+        # Normal flow (no comparison)
+        total_assertions = sum(len(cr.assertions) for cr in current_results)
+        passed_assertions = sum(
+            sum(1 for a in cr.assertions if a.passed) for cr in current_results
+        )
+        total_checks = sum(len(cr.checks) for cr in current_results)
+        passed_checks = sum(
+            sum(1 for c in cr.checks if c.passed) for cr in current_results
+        )
+        passed_cases  = sum(1 for cr in current_results if cr.passed)
+        total_cases   = len(current_results)
+        avg_score     = sum(cr.score for cr in current_results) / total_cases if total_cases > 0 else 0.0
+
+        headers = ["Case", "Assertions", "Checks", "Score", "Result"]
+        rows = []
+        for cr in current_results:
+            total_a  = len(cr.assertions)
+            passed_a = sum(1 for a in cr.assertions if a.passed)
+            total_c  = len(cr.checks)
+            passed_c = sum(1 for c in cr.checks if c.passed)
+            result_label = (
+                _colorize("PASS", Color.BOLD_GREEN)
+                if cr.passed
+                else _colorize("FAIL", Color.BOLD_RED)
+            )
+            rows.append([
+                cr.case_id,
+                f"{passed_a}/{total_a}",
+                f"{passed_c}/{total_c}",
+                f"{cr.score:.2f}",
+                result_label
+            ])
+
+        print_table(headers, rows, title="Test Results")
+
+        summary_lines = [
+            badge("Cases     ", f"{passed_cases}/{total_cases} passed"),
+            badge("Assertions", f"{passed_assertions}/{total_assertions} passed"),
+            badge("Checks    ", f"{passed_checks}/{total_checks} passed"),
+            badge("Avg Score ", f"{avg_score:.2f}"),
+        ]
+
+        threshold = getattr(args, "threshold", None)
+        if threshold is not None:
+            threshold = float(threshold)
+
+        failed = False
+        fail_reasons = []
+
+        if passed_cases < total_cases:
+            failed = True
+            fail_reasons.append(f"{total_cases - passed_cases} case(s) failed assertions or checks")
+
+        if threshold is not None and avg_score < threshold:
+            failed = True
+            fail_reasons.append(f"Average score {avg_score:.2f} is below threshold {threshold:.2f}")
+
+        safe_print()
+        if not failed:
+            print_box("All tests passed ✓", summary_lines)
+            safe_print(success("\n✓ Test suite complete"))
+        else:
+            print_box("Test suite failed", summary_lines, color=Color.BOLD_RED)
+            for reason in fail_reasons:
+                safe_print(_colorize(f"\n✗ {reason}", Color.BOLD_RED))
+            sys.exit(1)
 
 
 # ── test golden ───────────────────────────────────────────────────────────────

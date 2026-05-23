@@ -359,3 +359,51 @@ class StorageEngine:
         if version_id.startswith("v") and version_id[1:].isdigit():
             return int(version_id[1:])
         return None
+
+    def record_applied_diff(self, file_path: str, diff_hash: str) -> None:
+        """Record that a diff has been applied to a specific file."""
+        self._ensure_initialized()
+        path = self._root / "applied_diffs.json"
+
+        data = {}
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                pass
+
+        abs_path = os.path.abspath(file_path)
+        hashes = data.setdefault(abs_path, [])
+        if diff_hash not in hashes:
+            hashes.append(diff_hash)
+
+        # Atomic write
+        temp_fd, temp_path = tempfile.mkstemp(dir=str(self._root), suffix=".tmp")
+        try:
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(temp_fd)
+            os.replace(temp_path, str(path))
+        except Exception as e:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise PromptVCError(f"Failed to save applied diffs: {e}")
+
+    def is_diff_applied(self, file_path: str, diff_hash: str) -> bool:
+        """Check if a diff has already been applied to a specific file."""
+        self._ensure_initialized()
+        path = self._root / "applied_diffs.json"
+        if not path.exists():
+            return False
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return False
+
+        abs_path = os.path.abspath(file_path)
+        hashes = data.get(abs_path, [])
+        return diff_hash in hashes

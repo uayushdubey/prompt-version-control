@@ -28,19 +28,16 @@ class OpenAIProvider(BaseProvider):
         if max_tokens is not None:
             create_kwargs["max_tokens"] = max_tokens
 
-        retries = 2
-        response = None
-        for attempt in range(retries + 1):
-            try:
-                response = self._client.chat.completions.create(**create_kwargs)
-                break
-            except openai.OpenAIError as e:
-                if attempt < retries:
-                    time.sleep(0.5 * (attempt + 1))
-                else:
-                    raise RuntimeError(
-                        f"OpenAI API failed after {retries + 1} attempts: {str(e)}"
-                        ) from e
+        try:
+            response = self._retry_with_backoff(
+                lambda: self._client.chat.completions.create(**create_kwargs),
+                transient_exceptions=(openai.OpenAIError,),
+                max_retries=2,
+                base_delay=0.5,
+            )
+        except openai.OpenAIError as e:
+            raise RuntimeError(f"OpenAI API failed: {str(e)}") from e
+
         if response is None:
             raise RuntimeError("OpenAI API failed after retries with no response")
         output = ""

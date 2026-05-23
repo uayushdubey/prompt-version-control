@@ -24,6 +24,10 @@ from promptvc.cli.commands.test import test_command
 from promptvc.cli.commands.status import status_command
 from promptvc.cli.commands.shell import shell_command
 from promptvc.cli.commands.pipe import pipe_command
+from promptvc.cli.commands.validate import validate_command
+from promptvc.cli.commands.trace import trace_command
+
+
 
 from promptvc.core import PromptVCError
 from promptvc.core.lock import LockError
@@ -49,8 +53,11 @@ Examples:
   promptvc status
 """,
     )
+    parser.add_argument("--version", action="version", version="promptvc 0.1.0")
+    parser.add_argument("--json", action="store_true", help="Output machine-readable JSON format")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+
 
     # ── init ──────────────────────────────────────────────────────────────────
     subparsers.add_parser("init", help="Initialize a promptvc repository")
@@ -178,6 +185,8 @@ Examples:
     t_run.add_argument("--model", type=str)
     t_run.add_argument("--threshold", type=float, help="Minimum average score threshold (0.0 to 1.0) to pass")
     t_run.add_argument("--deterministic", action="store_true", help="Disable LLM-as-judge checks")
+    t_run.add_argument("--compare", type=str, help="Comparison version ID (e.g. v1) to check for regressions")
+
 
 
     t_golden = test_sub.add_parser("golden", help="Update golden files from current output")
@@ -206,6 +215,24 @@ Examples:
 
     p_val = pipe_sub.add_parser("validate", help="Validate a pipeline file")
     p_val.add_argument("pipeline", type=str, help="Path to pipeline JSON file")
+
+    # ── validate ──────────────────────────────────────────────────────────────
+    validate_p = subparsers.add_parser("validate", help="Validate a dataset JSON or a committed prompt version")
+    validate_sub = validate_p.add_subparsers(dest="validate_subcommand", required=True)
+
+    val_dataset = validate_sub.add_parser("dataset", help="Validate a dataset JSON file")
+    val_dataset.add_argument("file", type=str, help="Path to dataset JSON file")
+
+    val_prompt = validate_sub.add_parser("prompt", help="Validate a prompt version's schema consistency")
+    val_prompt.add_argument("name", type=str, help="Prompt space name")
+    val_prompt.add_argument("version", type=str, help="Version ID")
+
+    # ── trace ─────────────────────────────────────────────────────────────────
+    trace_p = subparsers.add_parser("trace", help="Show execution traces for a prompt")
+    trace_p.add_argument("name", type=str, help="Prompt space name")
+    trace_p.add_argument("version", type=str, nargs="?", help="Optional version ID filter")
+    trace_p.add_argument("--last", type=int, default=20, help="Number of traces to show (default: 20)")
+    trace_p.add_argument("--json", action="store_true", help="Output raw traces in JSON format")
 
     return parser
 
@@ -236,6 +263,8 @@ def _build_handler_map() -> Dict[str, Handler]:
         "test":    test_command,
         "shell":   shell_command,
         "pipe":    pipe_command,
+        "validate": validate_command,
+        "trace":    trace_command,
     }
 
 
@@ -253,9 +282,6 @@ def main() -> None:
         )
         sys.exit(1)
     except PromptVCError as exc:
-        print_error_panel(str(exc))
-        sys.exit(1)
-    except LockError as exc:
         print_error_panel(str(exc))
         sys.exit(1)
     except ValueError as exc:

@@ -157,17 +157,54 @@ def run_command(args: argparse.Namespace) -> None:
         safe_print(warning(f"⚠  Unused variable(s): {', '.join(sorted(unused))}"))
 
     # ── Execute ───────────────────────────────────────────────────────────────
+    import uuid
+    from datetime import datetime, timezone
+    from promptvc.core.trace import TraceRecord, TraceStore
+
+    trace_id = str(uuid.uuid4())
+    timestamp = datetime.now(timezone.utc).isoformat()
     t_start = time.monotonic()
+    
+    trace_store = TraceStore(repo.storage._root)
+    model_used = model or provider_name
+    cost = None
+
     try:
         with spinner(f"Running {args.name} @ {version} via {provider_name}…"):
             result = provider.run(rendered_prompt, **provider_kwargs)
     except Exception as exc:
+        error_msg = str(exc)
         print_error_panel(
             f"Provider call failed: {exc}",
             where=f"{provider_name}" + (f" / {model}" if model else ""),
             tips=["Check your API key and network connection",
                   f"Try the mock provider: --provider mock"],
         )
+        
+        # Emit failed trace
+        latency_ms = (time.monotonic() - t_start) * 1000
+        trace_rec = TraceRecord(
+            trace_id=trace_id,
+            timestamp=timestamp,
+            prompt_name=args.name,
+            version=version,
+            rendered_prompt=rendered_prompt,
+            variables=variables,
+            provider=provider_name,
+            model=model_used,
+            output="",
+            tokens=None,
+            input_tokens=None,
+            output_tokens=None,
+            latency_ms=latency_ms,
+            cost_usd=None,
+            score=None,
+            error=error_msg,
+        )
+        try:
+            trace_store.append(trace_rec)
+        except Exception:
+            pass
         return
 
     latency_ms = (time.monotonic() - t_start) * 1000
@@ -177,24 +214,42 @@ def run_command(args: argparse.Namespace) -> None:
         return
 
     output = result.get("output") or ""
-    if not output:
-        print_error_panel("Provider returned empty output.")
-        return
-
     tokens       = result.get("tokens")
     model_used   = result.get("model_used") or model or provider_name
-    # Try to split input/output tokens if provider returns them
     input_tokens  = result.get("input_tokens")
     output_tokens = result.get("output_tokens")
-    cost = None
+    
     if model_used:
         if input_tokens is not None and output_tokens is not None:
             cost = estimate_cost(model_used, input_tokens, output_tokens)
         elif tokens is not None:
-            # Rough estimate: assume 80% input, 20% output
             cost = estimate_cost(model_used, int(tokens * 0.8), int(tokens * 0.2))
 
-    # ── Persist ───────────────────────────────────────────────────────────────
+    # Append trace log
+    trace_rec = TraceRecord(
+        trace_id=trace_id,
+        timestamp=timestamp,
+        prompt_name=args.name,
+        version=version,
+        rendered_prompt=rendered_prompt,
+        variables=variables,
+        provider=provider_name,
+        model=model_used,
+        output=output,
+        tokens=tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        latency_ms=latency_ms,
+        cost_usd=cost,
+        score=None,
+        error=None,
+    )
+    try:
+        trace_store.append(trace_rec)
+    except Exception as exc:
+        safe_print(warning(f"⚠ Warning: Failed to persist trace: {exc}"))
+
+    # ── Persist to storage ────────────────────────────────────────────────────
     try:
         run_record = {
             "version":      version,
@@ -207,10 +262,10 @@ def run_command(args: argparse.Namespace) -> None:
             "model_used":   model_used,
             "timestamp":    repo._utc_now_iso(),
         }
-        # Use append_run for validated, atomic storage
         repo.storage.append_run(args.name, run_record)
-    except Exception:
-        pass  # never fail a run due to storage error
+    except Exception as exc:
+        safe_print(warning(f"⚠ Warning: Failed to persist run record: {exc}"))
+
 
     # ── Output ────────────────────────────────────────────────────────────────
     token_str = (
