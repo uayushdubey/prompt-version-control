@@ -56,9 +56,12 @@ Prompts support template parameters using `{{variable}}` brackets. A version can
 
 ### Declarative Unit Testing Engine
 The test module provides a local, CI-ready testing framework:
-* JSON-defined test cases specifying inputs and list of assertions.
-* Pre-built assertions: `contains`, `not_contains`, `regex`, `json_valid`, `min_tokens`, `max_tokens`, and `golden`.
+* JSON-defined test cases specifying inputs, assertions, and checks.
+* Composite Scoring: Runs rules and model evaluations to aggregate a normalized case score from 0.0 to 1.0.
+* Rule-Based Assertions: `contains`, `not_contains`, `regex`, `json_valid`, `min_tokens`, `max_tokens`, and `golden`.
 * Jaccard semantic similarity: The `golden` assertion measures similarity of token word-sets between execution output and a stored golden file.
+* LLM-as-a-Judge: Validates free-form model assertions (e.g. style constraints, safety guidelines) using configurable evaluation prompts against LLMs.
+* Regression Delta & Gates: Compares suite performance against a base version, generating a comparative score delta table, and failing CI with threshold gates.
 * Automated updates: The `test golden` command runs the prompt version and overwrites or creates golden file records.
 
 ### Multi-Step Orchestration Pipelines
@@ -74,10 +77,22 @@ A stateful interactive command loop for rapid prompt debugging:
 * Shell runtime metrics tracking: `cost` aggregates accumulated token usage, latency, and dollar costs across the current session.
 
 ### Diff-Based File Editing
-Modify filesystem resources using LLM instructions:
+Modify filesystem resources safely using LLM instructions:
 * Safe reader checks: Attempts UTF-8, UTF-8-sig, UTF-16, and Latin-1 encodings, preserving the original file encoding during modifications.
-* Unified diff validation: Parses model output as a strict unified diff, validates target contexts against original file lines, and renders a color-coded terminal patch preview.
+* Unified diff validation: Parses model output as a strict unified diff, validates target contexts against original file lines, and handles space-stripped context lines.
+* Atomic Backups & Rollback: Automatically saves a `.bak` backup of target files before modifying them, and restores the backup if anything goes wrong.
+* Idempotency checking: Automatically compares the SHA-256 fingerprint of the target file to prevent duplicate modifications.
 * Approval gate: Applies modifications only after interactive validation, logging the change log entry.
+
+### Observability and Trace Logging
+Gain deep runtime insight with complete execution logging:
+* Transactional tracing: Automatically logs inputs, outputs, tokens, latencies, model configurations, scores, and errors to `.promptvc/traces.jsonl`.
+* CLI querying: Search, filter, and inspect traces interactively using `promptvc trace`.
+
+### Schema & Dataset Validation
+Enforce strict consistency across prompt definitions and evaluations:
+* Prompt validation: Runs `promptvc validate prompt` to verify template consistency, variable names, and schema defaults.
+* Dataset validation: Runs `promptvc validate dataset` to verify the structure, types, and schema compatibility of bulk evaluation files.
 
 ---
 
@@ -264,8 +279,74 @@ View or modify configuration parameters.
   promptvc config set models.openai gpt-4o-mini
   ```
 
+### test
+Manage and execute automated assertion test suites.
+* Syntax: `promptvc test <subcommand> [flags]`
+* Subcommands:
+  * `run <name> <version> --suite <path>`: Run assertion test suite.
+    * `--threshold <float>`: Optional. Minimum average score (0.0 to 1.0) to pass (CI exit-code gate).
+    * `--compare <version>`: Optional. Version ID (e.g. v1) to check for regressions. Displays delta metrics table.
+    * `--deterministic`: Optional. Run only rules and skip LLM-as-a-judge assertions for speed/cost.
+  * `golden <name> <version> --suite <path>`: Run cases and update stored golden files with the outputs.
+  * `list [--dir <path>]`: List all test suite JSON files recursively (default path is `.`).
+* When to use: Validate prompt changes inside CI pipelines or local verification environments.
+* Example:
+  ```bash
+  promptvc test run summarize v2 --suite tests/suite.json --compare v1 --threshold 0.8
+  ```
+
+### validate
+Validate dataset files or committed prompt version schemas.
+* Syntax: `promptvc validate <subcommand>`
+* Subcommands:
+  * `dataset <file>`: Checks if a dataset file is well-formed JSON, contains `input` structures, and matches expected schemas.
+  * `prompt <name> <version>`: Checks consistency of schema defaults, variable naming, types, and properties.
+* When to use: Avoid executing corrupted runs by preemptively validating templates and test parameters.
+* Example:
+  ```bash
+  promptvc validate dataset test_inputs.json
+  promptvc validate prompt summarize latest
+  ```
+
+### trace
+Query and inspect execution runs log.
+* Syntax: `promptvc trace <name> [version] [flags]`
+* Flags:
+  * `--last <int>`: Retrieve the last N execution traces (default: 20).
+  * `--json`: Print raw trace logs as a JSON list.
+* Behavior: Retrieves execution logs from `.promptvc/traces.jsonl`, formats them as a clean summary table showing token count, latency, scores, and errors, and displays details for the latest run.
+* When to use: Audit runtime execution performance, debug outputs, or examine recent scoring history.
+* Example:
+  ```bash
+  promptvc trace summarize --last 10
+  ```
+
+### pipe
+Execute multi-step prompt workflows sequentially.
+* Syntax: `promptvc pipe <subcommand>`
+* Subcommands:
+  * `run <pipeline_file> [--var key=value] [--provider name]`: Runs the specified multi-step pipeline.
+  * `validate <pipeline_file>`: Verifies pipeline syntax and reference bindings without executing.
+* When to use: Compose chained tasks where downstream steps consume upstream step outputs.
+* Example:
+  ```bash
+  promptvc pipe run translate_and_summarize.json --var text="Hello world"
+  ```
+
+### shell
+Launch the stateful interactive REPL.
+* Syntax: `promptvc shell`
+* Behavior: Opens a command-line prompt loop allowing variable bindings, quick model/provider switching, and real-time cost and latency tracking.
+* When to use: Iterative debugging and prompt hacking.
+* Example:
+  ```bash
+  promptvc shell
+  ```
+
 ### Global Flag Behaviors
 
+* `--version`: Print program version and exit.
+* `--json`: Output command results in machine-readable JSON format where applicable.
 * `--provider`: Invocation provider override. Resolution order: `--provider` flag -> value in `config.json` -> `mock`.
 * `--model`: Invocation model override. Resolution order: `--model` flag -> configured default in `config.json` -> provider-native default.
 * `--var`: Declares template inputs. Parsed as `key=value` strings.
@@ -564,6 +645,10 @@ The codebase incorporates several checks to ensure reliability in production env
 * **Encoding Auto-Detection:** Modifying codebase files via `apply` uses layered encoding checks to prevent silent character corruption in non-ASCII codebases.
 * **Stream Reconfiguration:** At module startup, `console.py` detects Windows shells and configures stdout/stderr streams to UTF-8 to prevent encoder faults when printing Unicode elements.
 * **Validation Gating:** Command handlers validate file path parameters and system configurations before calling provider APIs, preventing unnecessary token expenditure on bad configurations.
+* **Provider Lazy Registration:** Postpones loading provider libraries until they are executed, preventing crash sequences on machines missing dependencies for providers they do not use.
+* **Backup and Rollback Safety:** Automatically writes `.bak` backups of codebase files during `apply` actions, safely rolling back changes if a diff fails to apply cleanly.
+* **Idempotency Verification:** Validates the target file using SHA-256 fingerprints before modifications to guarantee that a prompt change is not double-applied.
+* **Self-Healing Connections:** Combines backoff-with-jitter retry logic for model execution calls to gracefully handle rate-limit (HTTP 429) errors and temporary connection drops.
 
 ---
 
@@ -594,6 +679,5 @@ $ promptvc config set models.openai "gpt-4o-mini"
 
 ## 15. Roadmap
 
-* **LLM-As-A-Judge Evaluations:** Add validation steps that call external model evaluators.
 * **Remote Registry Sync:** Implement commands to push and pull prompt spaces to cloud systems (PostgreSQL, S3) to support team environments.
 * **Scoring Dashboard:** Build local static site report generation detailing cost trends, latency performance, and test history graphs.
