@@ -7,12 +7,7 @@ from typing import Any, Dict
 
 from promptvc.core.repo import PromptRepo
 from promptvc.utils.config import get_config_value
-from promptvc.providers.mock import MockProvider
-from promptvc.providers.openai import OpenAIProvider
-from promptvc.providers.gemini import GeminiProvider
-from promptvc.providers.anthropic import AnthropicProvider
-from promptvc.providers.ollama import OllamaProvider
-from promptvc.providers.registry import register_provider, get_provider
+from promptvc.providers.registry import get_provider
 from promptvc.utils.template import render_template, find_unused_variables
 from promptvc.utils.console import (
     safe_print, print_table, print_box, badge,
@@ -21,15 +16,6 @@ from promptvc.utils.console import (
 )
 from promptvc.utils.cost import estimate_cost, format_cost, format_latency
 
-for _name, _cls in [
-    ("mock", MockProvider), ("openai", OpenAIProvider),
-    ("gemini", GeminiProvider), ("anthropic", AnthropicProvider),
-    ("ollama", OllamaProvider),
-]:
-    try:
-        register_provider(_name, _cls)
-    except ValueError:
-        pass
 
 
 def compare_command(args: argparse.Namespace) -> None:

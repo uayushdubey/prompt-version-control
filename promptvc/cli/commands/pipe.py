@@ -12,12 +12,8 @@ from typing import Dict
 from promptvc.core.pipeline import load_pipeline, validate_pipeline, execute_pipeline
 from promptvc.core.repo import PromptRepo
 from promptvc.utils.config import get_config_value
-from promptvc.providers.mock import MockProvider
-from promptvc.providers.openai import OpenAIProvider
-from promptvc.providers.gemini import GeminiProvider
-from promptvc.providers.anthropic import AnthropicProvider
-from promptvc.providers.ollama import OllamaProvider
-from promptvc.providers.registry import register_provider, get_provider
+from promptvc.providers.registry import get_provider
+from promptvc.cli.helpers import _parse_vars
 from promptvc.utils.console import (
     safe_print, print_table, print_box, print_error_panel,
     badge, bold, dim, success, warning, spinner,
@@ -25,24 +21,6 @@ from promptvc.utils.console import (
 )
 from promptvc.utils.cost import estimate_cost, format_cost, format_latency
 
-for _name, _cls in [
-    ("mock", MockProvider), ("openai", OpenAIProvider),
-    ("gemini", GeminiProvider), ("anthropic", AnthropicProvider),
-    ("ollama", OllamaProvider),
-]:
-    try:
-        register_provider(_name, _cls)
-    except ValueError:
-        pass
-
-
-def _parse_vars(var_args) -> Dict[str, str]:
-    vars_: Dict[str, str] = {}
-    for entry in (var_args or []):
-        if "=" in entry:
-            k, v = entry.split("=", 1)
-            vars_[k.strip()] = v.strip()
-    return vars_
 
 
 # ── pipe run ──────────────────────────────────────────────────────────────────

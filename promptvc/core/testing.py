@@ -23,8 +23,6 @@ class AssertionResult:
     actual: Optional[str]   = None
 
 
-# ── Test case result ───────────────────────────────────────────────────────────
-
 @dataclass
 class CaseResult:
     case_id: str
@@ -32,14 +30,24 @@ class CaseResult:
     output: str
     tokens: Optional[int]
     assertions: List[AssertionResult] = field(default_factory=list)
+    score: float = 1.0
+    checks: List[Any] = field(default_factory=list)
+    score_feedback: Optional[str] = None
 
     @property
     def passed(self) -> bool:
-        return all(a.passed for a in self.assertions)
+        assertions_passed = all(a.passed for a in self.assertions)
+        checks_passed = all(c.passed for c in self.checks)
+        return assertions_passed and checks_passed
 
     @property
     def failed_assertions(self) -> List[AssertionResult]:
         return [a for a in self.assertions if not a.passed]
+
+    @property
+    def failed_checks(self) -> List[Any]:
+        return [c for c in self.checks if not c.passed]
+
 
 
 # ── Similarity helper (for golden comparison) ─────────────────────────────────
@@ -208,8 +216,12 @@ def run_case_assertions(
     output: str,
     tokens: Optional[int],
     golden_dir: str = ".",
+    provider: Any = None,
+    deterministic: bool = False,
 ) -> CaseResult:
-    """Run all assertions for a single test case."""
+    """Run all assertions and checks/llm judge for a single test case."""
+    from promptvc.core.scorer import CompositeScorer
+
     assertions_cfg = case.get("assertions", [])
     case_id   = case.get("id", "unnamed")
     input_vars = case.get("input", {})
@@ -219,10 +231,37 @@ def run_case_assertions(
         for a in assertions_cfg
     ]
 
+    checks_cfg = case.get("checks", [])
+    llm_judge_cfg = case.get("llm_judge")
+
+    scorer = CompositeScorer()
+    score_res = scorer.score(
+        output=output,
+        checks=checks_cfg,
+        llm_judge_cfg=llm_judge_cfg,
+        provider=provider,
+        tokens=tokens,
+        deterministic=deterministic,
+    )
+
+    if checks_cfg or llm_judge_cfg:
+        score = score_res.score
+    else:
+        # Fallback to assertions
+        if not assertions_cfg:
+            score = 1.0
+        else:
+            passed_count = sum(1 for r in results if r.passed)
+            score = passed_count / len(assertions_cfg)
+
     return CaseResult(
         case_id=case_id,
         input_vars=input_vars,
         output=output,
         tokens=tokens,
         assertions=results,
+        score=score,
+        checks=score_res.checks,
+        score_feedback=score_res.feedback,
     )
+

@@ -176,6 +176,9 @@ Examples:
     t_run.add_argument("--suite", type=str, required=True, help="Path to test suite JSON")
     t_run.add_argument("--provider", type=str, default=None)
     t_run.add_argument("--model", type=str)
+    t_run.add_argument("--threshold", type=float, help="Minimum average score threshold (0.0 to 1.0) to pass")
+    t_run.add_argument("--deterministic", action="store_true", help="Disable LLM-as-judge checks")
+
 
     t_golden = test_sub.add_parser("golden", help="Update golden files from current output")
     t_golden.add_argument("name", type=str)

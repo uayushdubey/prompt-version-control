@@ -4,6 +4,7 @@ import argparse
 from typing import Optional
 
 from promptvc.core.repo import PromptRepo
+from promptvc.utils.console import safe_print, print_error_panel
 
 
 def get_repo() -> Optional[PromptRepo]:
@@ -16,7 +17,7 @@ def get_repo() -> Optional[PromptRepo]:
     try:
         return PromptRepo()
     except Exception as exc:  # noqa: BLE001
-        print(f"✗ Failed to load repository: {exc}")
+        print_error_panel(f"Failed to load repository: {exc}")
         return None
 
 
@@ -28,6 +29,6 @@ def require_arg(args: argparse.Namespace, attr: str) -> Optional[str]:
     """
     value = getattr(args, attr, None)
     if not value or not value.strip():
-        print(f"✗ Missing required argument: <{attr}>")
+        print_error_panel(f"Missing required argument: <{attr}>")
         return None
-    return value.strip()
+    return value.strip()

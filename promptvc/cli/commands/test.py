@@ -14,29 +14,14 @@ import time
 from promptvc.core.repo import PromptRepo
 from promptvc.core.testing import run_case_assertions, CaseResult
 from promptvc.utils.config import get_config_value
-from promptvc.providers.mock import MockProvider
-from promptvc.providers.openai import OpenAIProvider
-from promptvc.providers.gemini import GeminiProvider
-from promptvc.providers.anthropic import AnthropicProvider
-from promptvc.providers.ollama import OllamaProvider
-from promptvc.providers.registry import register_provider, get_provider
+from promptvc.providers.registry import get_provider
+
 from promptvc.utils.template import render_template
 from promptvc.utils.console import (
     safe_print, print_table, print_box, print_error_panel,
     badge, bold, dim, success, warning, spinner,
     _colorize, Color,
 )
-
-for _name, _cls in [
-    ("mock", MockProvider), ("openai", OpenAIProvider),
-    ("gemini", GeminiProvider), ("anthropic", AnthropicProvider),
-    ("ollama", OllamaProvider),
-]:
-    try:
-        register_provider(_name, _cls)
-    except ValueError:
-        pass
-
 
 # ── test run ──────────────────────────────────────────────────────────────────
 
@@ -113,20 +98,36 @@ def test_run_command(args: argparse.Namespace) -> None:
         output = result.get("output") or ""
         tokens = result.get("tokens")
 
-        cr = run_case_assertions(case, output, tokens, golden_dir)
+        deterministic = getattr(args, "deterministic", False)
+        cr = run_case_assertions(
+            case,
+            output,
+            tokens,
+            golden_dir,
+            provider=provider,
+            deterministic=deterministic,
+        )
         case_results.append(cr)
 
         if cr.passed:
-            safe_print(_colorize(f"  ✓  {case_id}", Color.BOLD_GREEN))
+            safe_print(_colorize(f"  ✓  {case_id}  (Score: {cr.score:.2f})", Color.BOLD_GREEN))
         else:
             failed_count += 1
-            safe_print(_colorize(f"  ✗  {case_id}", Color.BOLD_RED))
+            safe_print(_colorize(f"  ✗  {case_id}  (Score: {cr.score:.2f})", Color.BOLD_RED))
             for a in cr.failed_assertions:
-                safe_print(dim(f"       [{a.assertion_type}] {a.message}"))
+                safe_print(dim(f"       [assertion: {a.assertion_type}] {a.message}"))
                 if a.expected:
-                    safe_print(dim(f"       expected: {a.expected}"))
+                    safe_print(dim(f"         expected: {a.expected}"))
                 if a.actual:
-                    safe_print(dim(f"       actual  : {a.actual}"))
+                    safe_print(dim(f"         actual  : {a.actual}"))
+            for c in cr.failed_checks:
+                safe_print(dim(f"       [check: {c.check_type}] {c.message}"))
+                if c.expected:
+                    safe_print(dim(f"         expected: {c.expected}"))
+                if c.actual:
+                    safe_print(dim(f"         actual  : {c.actual}"))
+            if cr.score_feedback:
+                safe_print(dim(f"       [feedback] {cr.score_feedback.strip()}"))
 
     # ── Summary ────────────────────────────────────────────────────────────────
     safe_print()
@@ -134,34 +135,66 @@ def test_run_command(args: argparse.Namespace) -> None:
     passed_assertions = sum(
         sum(1 for a in cr.assertions if a.passed) for cr in case_results
     )
+    total_checks = sum(len(cr.checks) for cr in case_results)
+    passed_checks = sum(
+        sum(1 for c in cr.checks if c.passed) for cr in case_results
+    )
     passed_cases  = sum(1 for cr in case_results if cr.passed)
     total_cases   = len(case_results)
+    avg_score     = sum(cr.score for cr in case_results) / total_cases if total_cases > 0 else 0.0
 
-    headers = ["Case", "Assertions", "Result"]
+    headers = ["Case", "Assertions", "Checks", "Score", "Result"]
     rows = []
     for cr in case_results:
         total_a  = len(cr.assertions)
         passed_a = sum(1 for a in cr.assertions if a.passed)
+        total_c  = len(cr.checks)
+        passed_c = sum(1 for c in cr.checks if c.passed)
         result_label = (
             _colorize("PASS", Color.BOLD_GREEN)
             if cr.passed
             else _colorize("FAIL", Color.BOLD_RED)
         )
-        rows.append([cr.case_id, f"{passed_a}/{total_a}", result_label])
+        rows.append([
+            cr.case_id,
+            f"{passed_a}/{total_a}",
+            f"{passed_c}/{total_c}",
+            f"{cr.score:.2f}",
+            result_label
+        ])
 
     print_table(headers, rows, title="Test Results")
 
     summary_lines = [
         badge("Cases     ", f"{passed_cases}/{total_cases} passed"),
         badge("Assertions", f"{passed_assertions}/{total_assertions} passed"),
+        badge("Checks    ", f"{passed_checks}/{total_checks} passed"),
+        badge("Avg Score ", f"{avg_score:.2f}"),
     ]
+    
+    threshold = getattr(args, "threshold", None)
+    if threshold is not None:
+        threshold = float(threshold)
+
+    failed = False
+    fail_reasons = []
+
+    if passed_cases < total_cases:
+        failed = True
+        fail_reasons.append(f"{total_cases - passed_cases} case(s) failed assertions or checks")
+
+    if threshold is not None and avg_score < threshold:
+        failed = True
+        fail_reasons.append(f"Average score {avg_score:.2f} is below threshold {threshold:.2f}")
+
     safe_print()
-    if failed_count == 0:
+    if not failed:
         print_box("All tests passed ✓", summary_lines)
         safe_print(success("\n✓ Test suite complete"))
     else:
-        print_box(f"{failed_count} case(s) FAILED", summary_lines, color=Color.BOLD_RED)
-        safe_print(_colorize(f"\n✗ {failed_count} test(s) failed", Color.BOLD_RED))
+        print_box("Test suite failed", summary_lines, color=Color.BOLD_RED)
+        for reason in fail_reasons:
+            safe_print(_colorize(f"\n✗ {reason}", Color.BOLD_RED))
         sys.exit(1)
 
 

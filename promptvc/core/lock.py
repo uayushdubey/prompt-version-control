@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from typing import Mapping, Any, Dict
 
+from promptvc.core.storage import PromptVCError
+
 
 # =========================
 # Exceptions
 # =========================
 
-class LockError(Exception):
+class LockError(PromptVCError):
     """Base exception for lock-related errors."""
+
 
     def __init__(self, name: str, version: str, message: str) -> None:
         self.name = name

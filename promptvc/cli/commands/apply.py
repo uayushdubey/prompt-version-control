@@ -5,12 +5,12 @@ import os
 from typing import Dict, List, Optional, Set
 
 from promptvc.core.repo import PromptRepo
-from promptvc.providers.mock import MockProvider
-from promptvc.providers.openai import OpenAIProvider
-from promptvc.providers.gemini import GeminiProvider
-from promptvc.providers.anthropic import AnthropicProvider
-from promptvc.providers.ollama import OllamaProvider
-from promptvc.providers.registry import register_provider, get_provider
+from promptvc.providers.registry import get_provider
+from promptvc.cli.helpers import (
+    _parse_vars,
+    _collect_schema_variables,
+    _collect_template_variables,
+)
 from promptvc.utils.config import get_config_value
 from promptvc.utils.diff_apply import apply_unified_diff
 from promptvc.utils.template import render_template, find_unused_variables, extract_variables
@@ -19,71 +19,6 @@ from promptvc.utils.console import (
     dim, bold, safe_print, print_box, print_error_panel, badge, spinner,
 )
 
-for _name, _cls in [
-    ("mock", MockProvider), ("openai", OpenAIProvider),
-    ("gemini", GeminiProvider), ("anthropic", AnthropicProvider),
-    ("ollama", OllamaProvider),
-]:
-    try:
-        register_provider(_name, _cls)
-    except ValueError:
-        pass
-
-
-def _parse_vars(var_args: Optional[List[str]]) -> Dict[str, str]:
-    if not var_args:
-        return {}
-    variables: Dict[str, str] = {}
-    for entry in var_args:
-        if "=" not in entry:
-            raise ValueError(f"Invalid --var format: '{entry}'. Expected 'key=value'.")
-        key, value = entry.split("=", 1)
-        key = key.strip()
-        if not key:
-            raise ValueError(f"Invalid --var format: '{entry}'. Key must not be empty.")
-        variables[key] = value.strip()
-    return variables
-
-
-def _collect_schema_variables(
-    schema_vars: Dict[str, Dict],
-    provided_vars: Dict[str, str],
-    is_non_interactive: bool = False,
-) -> Dict[str, str]:
-    collected: Dict[str, str] = {}
-    for var_name, spec in schema_vars.items():
-        if var_name in provided_vars:
-            continue
-        required = spec.get("required", False)
-        default  = spec.get("default")
-        if default is not None:
-            collected[var_name] = str(default)
-            continue
-        if required:
-            if is_non_interactive:
-                raise RuntimeError(f"Missing required variable '{var_name}' in non-interactive mode.")
-            value = input(dim(f"  {var_name}: ")).strip()
-            collected[var_name] = value
-    return collected
-
-
-def _collect_template_variables(
-    required_vars: Set[str],
-    provided_vars: Dict[str, str],
-    is_non_interactive: bool = False,
-) -> Dict[str, str]:
-    missing = required_vars - set(provided_vars.keys())
-    if not missing:
-        return {}
-    if is_non_interactive:
-        first_missing = sorted(missing)[0]
-        raise RuntimeError(f"Missing required variable '{first_missing}' in non-interactive mode.")
-    safe_print(bold("\n  Variables needed:"))
-    collected: Dict[str, str] = {}
-    for var in sorted(missing):
-        value = input(dim(f"  {var}: ")).strip()
-        collected[var] = value
-    return collected
 
 
 def read_file_safe(path: str) -> tuple[str, str]:

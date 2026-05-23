@@ -23,6 +23,9 @@ def register_provider(name: str, provider_cls: Type[BaseProvider]) -> None:
 def get_provider(name: str, config: Optional[Dict[str, Any]] = None) -> BaseProvider:
     name = name.lower()
 
+    from promptvc.providers import ensure_providers_registered
+    ensure_providers_registered()
+
     if name not in _REGISTRY:
         available = ", ".join(sorted(_REGISTRY.keys())) or "none"
         raise ValueError(
@@ -33,4 +36,6 @@ def get_provider(name: str, config: Optional[Dict[str, Any]] = None) -> BaseProv
 
 
 def list_providers() -> List[str]:
+    from promptvc.providers import ensure_providers_registered
+    ensure_providers_registered()
     return sorted(_REGISTRY.keys())
