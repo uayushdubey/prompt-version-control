@@ -2,14 +2,19 @@ import os
 import time
 from typing import Any, Dict, Optional
 
-import anthropic
-
 from .base import BaseProvider
 
 
 class AnthropicProvider(BaseProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
+        try:
+            import anthropic
+        except ImportError:
+            raise ImportError(
+                "The 'anthropic' library is required to use AnthropicProvider. "
+                "Install it with: pip install promptvc[anthropic]"
+            )
         api_key = self.config.get("api_key") or os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY not set")

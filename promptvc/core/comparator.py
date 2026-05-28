@@ -1,4 +1,4 @@
-from promptvc.core.eval import run_evaluation
+from promptvc.core.evaluator import run_evaluation
 
 
 def compare_versions(

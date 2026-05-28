@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import abc
 import hashlib
+import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Type, runtime_checkable
 
 from promptvc.core.storage import (
     StorageEngine,
     VersionNotFoundError,
+    LockGuard,
+    LockError,
+    VersionLockedError,
+    AlreadyLockedError,
 )
-from promptvc.core.lock import LockGuard
-from promptvc.core.tokenizer import Tokenizer
 
 
 @runtime_checkable
@@ -450,3 +454,211 @@ class PromptRepo:
 
             if "description" in spec and not isinstance(spec["description"], str):
                 raise ValueError(f"'description' for '{name}' must be a string.")
+
+
+# ===========================================================================
+# Tokenizer Implementations & Registry
+# ===========================================================================
+
+class TokenizerProtocol(Protocol):
+    """Structural protocol for tokenizer duck-typing."""
+
+    def count(self, text: str) -> int:
+        ...
+
+
+class BaseTokenizer(abc.ABC):
+    """Abstract base for all tokenizer implementations."""
+
+    @abc.abstractmethod
+    def count(self, text: str) -> int:
+        """Return the token count for the given text."""
+        raise NotImplementedError
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__}>"
+
+
+class WhitespaceTokenizer(BaseTokenizer):
+    """Splits on whitespace. Fast and predictable."""
+
+    def count(self, text: str) -> int:
+        if not text:
+            return 0
+        return len(text.split())
+
+
+class WordPunctTokenizer(BaseTokenizer):
+    """
+    Splits into words and punctuation tokens via regex.
+
+    More granular than whitespace splitting; useful for
+    prompts with heavy punctuation.
+    """
+
+    _pattern = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+
+    def count(self, text: str) -> int:
+        if not text:
+            return 0
+        return len(self._pattern.findall(text))
+
+
+class CharacterEstimateTokenizer(BaseTokenizer):
+    """
+    Approximates token count from character length.
+
+    Heuristic: 1 token ≈ 4 characters (common LLM rule of thumb).
+    Returns 0 for empty input.
+    """
+
+    _CHARS_PER_TOKEN = 4
+
+    def count(self, text: str) -> int:
+        if not text:
+            return 0
+        return len(text) // self._CHARS_PER_TOKEN
+
+
+_TOKENIZER_REGISTRY: Dict[str, Type[BaseTokenizer]] = {
+    "whitespace": WhitespaceTokenizer,
+    "wordpunct": WordPunctTokenizer,
+    "character": CharacterEstimateTokenizer,
+}
+
+_BUILTIN_TOKENIZER_NAMES: frozenset[str] = frozenset(_TOKENIZER_REGISTRY.keys())
+
+# Default alias used by PromptRepo when no tokenizer is specified
+Tokenizer = WhitespaceTokenizer
+
+
+def get_tokenizer(name: str) -> BaseTokenizer:
+    """
+    Return a tokenizer instance by registered name.
+
+    Raises:
+        ValueError: If name is empty or not registered.
+    """
+    if not name:
+        raise ValueError("Tokenizer name cannot be empty.")
+
+    key = name.strip().lower()
+
+    if key not in _TOKENIZER_REGISTRY:
+        available = ", ".join(sorted(_TOKENIZER_REGISTRY))
+        raise ValueError(
+            f"Tokenizer '{name}' is not registered. "
+            f"Available: {available}"
+        )
+
+    return _TOKENIZER_REGISTRY[key]()
+
+
+def register_tokenizer(
+    name: str,
+    cls: Type[BaseTokenizer],
+    *,
+    force: bool = False,
+) -> None:
+    """
+    Register a custom tokenizer class.
+
+    Args:
+        name:  Unique identifier for the tokenizer.
+        cls:   Class inheriting from BaseTokenizer.
+        force: If True, overwrite an existing custom registration.
+               Built-in tokenizers cannot be overwritten.
+
+    Raises:
+        ValueError: If name is invalid, already registered, or is a built-in.
+        TypeError:  If cls does not inherit BaseTokenizer.
+    """
+    if not name:
+        raise ValueError("Tokenizer name cannot be empty.")
+
+    key = name.strip().lower()
+
+    if key in _BUILTIN_TOKENIZER_NAMES:
+        raise ValueError(
+            f"Cannot overwrite built-in tokenizer '{name}'."
+        )
+
+    if key in _TOKENIZER_REGISTRY and not force:
+        raise ValueError(
+            f"Tokenizer '{name}' is already registered. "
+            "Pass force=True to overwrite."
+        )
+
+    if not issubclass(cls, BaseTokenizer):
+        raise TypeError(
+            f"{cls.__name__} must inherit from BaseTokenizer."
+        )
+
+    _TOKENIZER_REGISTRY[key] = cls
+
+
+def unregister_tokenizer(name: str) -> None:
+    """
+    Remove a custom tokenizer from the registry.
+
+    Built-in tokenizers cannot be removed.
+
+    Raises:
+        ValueError: If name is a built-in or not registered.
+    """
+    if not name:
+        raise ValueError("Tokenizer name cannot be empty.")
+
+    key = name.strip().lower()
+
+    if key in _BUILTIN_TOKENIZER_NAMES:
+        raise ValueError(
+            f"Cannot unregister built-in tokenizer '{name}'."
+        )
+
+    if key not in _TOKENIZER_REGISTRY:
+        raise ValueError(
+            f"Tokenizer '{name}' is not registered."
+        )
+
+    del _TOKENIZER_REGISTRY[key]
+
+
+def list_tokenizers(*, include_builtins: bool = True) -> List[str]:
+    """
+    Return names of all registered tokenizers.
+
+    Args:
+        include_builtins: If False, only custom tokenizers are returned.
+    """
+    if include_builtins:
+        return sorted(_TOKENIZER_REGISTRY.keys())
+
+    return sorted(k for k in _TOKENIZER_REGISTRY if k not in _BUILTIN_TOKENIZER_NAMES)
+
+
+def get_tokenizer_info(name: str) -> Dict[str, object]:
+    """
+    Return metadata about a registered tokenizer.
+
+    Returns a dict with keys: name, class, builtin.
+    Useful for CLI introspection and debugging.
+    """
+    if not name:
+        raise ValueError("Tokenizer name cannot be empty.")
+
+    key = name.strip().lower()
+
+    if key not in _TOKENIZER_REGISTRY:
+        available = ", ".join(sorted(_TOKENIZER_REGISTRY))
+        raise ValueError(
+            f"Tokenizer '{name}' not found. Available: {available}"
+        )
+
+    cls = _TOKENIZER_REGISTRY[key]
+    return {
+        "name": key,
+        "class": cls.__name__,
+        "builtin": key in _BUILTIN_TOKENIZER_NAMES,
+        "doc": cls.__doc__ or "",
+    }

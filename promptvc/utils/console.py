@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from typing import Generator, List, Optional, Sequence
 
 # ── Force UTF-8 output on Windows so box-drawing/emoji chars work ─────────────
-if sys.platform == "win32":
+if sys.platform == "win32" and "pytest" not in sys.modules:
     try:
         sys.stdout = io.TextIOWrapper(
             sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True

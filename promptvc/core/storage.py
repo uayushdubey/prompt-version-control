@@ -5,8 +5,10 @@ import json
 import os
 import re
 import tempfile
+from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Mapping, Optional, TypedDict
+
 
 
 # =========================
@@ -406,4 +408,159 @@ class StorageEngine:
 
         abs_path = os.path.abspath(file_path)
         hashes = data.get(abs_path, [])
-        return diff_hash in hashes
+        return diff_hash in hashes
+
+
+# =========================
+# Lock Exceptions
+# =========================
+
+class LockError(PromptVCError):
+    """Base exception for lock-related errors."""
+
+    def __init__(self, name: str, version: str, message: str) -> None:
+        self.name = name
+        self.version = version
+        super().__init__(f"[{name}:{version}] {message}")
+
+
+class VersionLockedError(LockError):
+    """Raised when attempting to modify a locked version."""
+
+    def __init__(self, name: str, version: str) -> None:
+        super().__init__(name, version, "Version is locked and cannot be modified.")
+
+
+class AlreadyLockedError(LockError):
+    """Raised when attempting to lock an already locked version."""
+
+    def __init__(self, name: str, version: str) -> None:
+        super().__init__(name, version, "Version is already locked.")
+
+
+# =========================
+# Lock Guard
+# =========================
+
+class LockGuard:
+    """
+    Stateless lock enforcement utility.
+
+    Provides pure validation and immutable updates.
+    """
+
+    @staticmethod
+    def _is_locked(version_data: Mapping[str, Any]) -> bool:
+        return bool(version_data.get("locked", False))
+
+    @classmethod
+    def assert_mutable(
+        cls,
+        version_data: Mapping[str, Any],
+        name: str,
+        version: str,
+    ) -> None:
+        """
+        Ensure version is not locked.
+
+        Raises:
+            VersionLockedError
+        """
+        if cls._is_locked(version_data):
+            raise VersionLockedError(name, version)
+
+    @classmethod
+    def assert_not_already_locked(
+        cls,
+        version_data: Mapping[str, Any],
+        name: str,
+        version: str,
+    ) -> None:
+        """
+        Ensure version is not already locked.
+
+        Raises:
+            AlreadyLockedError
+        """
+        if cls._is_locked(version_data):
+            raise AlreadyLockedError(name, version)
+
+    @staticmethod
+    def apply_lock(version_data: Mapping[str, Any]) -> Dict[str, Any]:
+        """
+        Return a new version dict with lock applied.
+
+        Does NOT mutate input.
+        """
+        new_data = dict(version_data)
+        new_data["locked"] = True
+        return new_data
+
+    @classmethod
+    def is_locked(cls, version_data: Mapping[str, Any]) -> bool:
+        """
+        Check if version is locked.
+        """
+        return cls._is_locked(version_data)
+
+
+# =========================
+# Execution Tracing
+# =========================
+
+@dataclass
+class TraceRecord:
+    trace_id: str  # UUID
+    timestamp: str  # ISO format
+    prompt_name: str
+    version: str
+    rendered_prompt: str
+    variables: Dict[str, str]
+    provider: str
+    model: str
+    output: str
+    tokens: Optional[int] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    latency_ms: float = 0.0
+    cost_usd: Optional[float] = None
+    score: Optional[float] = None
+    error: Optional[str] = None
+
+
+class TraceStore:
+    """Append-only trace log stored as JSONL for efficient querying."""
+
+    def __init__(self, root: Path):
+        self._path = root / "traces.jsonl"
+
+    def append(self, record: TraceRecord) -> None:
+        """Append a trace record to the JSONL log file."""
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(asdict(record)) + "\n")
+
+    def query(
+        self,
+        name: str,
+        version: str = None,
+        limit: int = 20,
+    ) -> List[TraceRecord]:
+        """Query recent trace records matching name and optional version."""
+        if not self._path.exists():
+            return []
+
+        records = []
+        with open(self._path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    if data.get("prompt_name") == name:
+                        if version is None or data.get("version") == version:
+                            records.append(TraceRecord(**data))
+                except Exception:
+                    continue
+
+        return records[-limit:]

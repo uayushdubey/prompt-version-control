@@ -1,47 +1,51 @@
 """
 promptvc.core — version control engine for LLM prompts.
-
-Public surface:
-    PromptRepo              – main entry point
-    StorageEngine           – low-level persistence
-    get_tokenizer           – retrieve tokenizer by name
-    register_tokenizer      – add custom tokenizer
-    unregister_tokenizer    – remove custom tokenizer
-    list_tokenizers         – list registered tokenizers
-    compute_diff            – word-level diff between prompts
-    format_diff             – format diff lines for display
-    LockGuard               – version lock enforcement
-    Exceptions              – PromptVCError, LockError, and subclasses
 """
 
-from promptvc.core.repo import PromptRepo
-from promptvc.core.storage import (
-    StorageEngine,
-    PromptVCError,
-    PromptSpaceNotFoundError,
-    VersionNotFoundError,
-    RepoNotInitializedError,
-)
-from promptvc.core.lock import (
-    LockGuard,
-    LockError,
-    VersionLockedError,
-    AlreadyLockedError,
-)
-from promptvc.core.diff import compute_diff, format_diff
-from promptvc.core.tokenizer import (
+from promptvc.core.repo import (
+    PromptRepo,
     get_tokenizer,
     register_tokenizer,
     unregister_tokenizer,
     list_tokenizers,
     get_tokenizer_info,
 )
+from promptvc.core.storage import (
+    StorageEngine,
+    PromptVCError,
+    PromptSpaceNotFoundError,
+    VersionNotFoundError,
+    RepoNotInitializedError,
+    LockError,
+    VersionLockedError,
+    AlreadyLockedError,
+    TraceRecord,
+    TraceStore,
+)
+from promptvc.core.evaluator import (
+    AssertionResult,
+    CaseResult,
+    run_assertion,
+    run_case_assertions,
+    PipelineStep,
+    Pipeline,
+    load_pipeline,
+    validate_pipeline,
+    execute_pipeline,
+    StepResult,
+    run_evaluation,
+)
+from promptvc.core.comparator import compare_versions
+from promptvc.core.validator import validate_dataset, validate_prompt
+from promptvc.utils.diff import compute_diff, format_diff, compute_diff_stats
 
 __all__ = [
     # Main interface
     "PromptRepo",
-    # Storage
+    # Storage & Tracing
     "StorageEngine",
+    "TraceRecord",
+    "TraceStore",
     # Tokenizer
     "get_tokenizer",
     "register_tokenizer",
@@ -51,9 +55,8 @@ __all__ = [
     # Diff
     "compute_diff",
     "format_diff",
-    # Locking
-    "LockGuard",
-    # Exceptions — grouped for discoverability
+    "compute_diff_stats",
+    # Exceptions
     "PromptVCError",
     "PromptSpaceNotFoundError",
     "VersionNotFoundError",
@@ -61,4 +64,21 @@ __all__ = [
     "LockError",
     "VersionLockedError",
     "AlreadyLockedError",
+    # Testing & Evaluation & Pipeline
+    "AssertionResult",
+    "CaseResult",
+    "run_assertion",
+    "run_case_assertions",
+    "PipelineStep",
+    "Pipeline",
+    "load_pipeline",
+    "validate_pipeline",
+    "execute_pipeline",
+    "StepResult",
+    "run_evaluation",
+    # Comparison
+    "compare_versions",
+    # Validation
+    "validate_dataset",
+    "validate_prompt",
 ]

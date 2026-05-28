@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "promptvc"
+version = "0.1.0"
+description = "Prompt Version Control — git for LLM prompts"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "requests",
+]
+
+[project.optional-dependencies]
+openai = ["openai"]
+anthropic = ["anthropic"]
+gemini = ["google-generativeai"]
+ollama = []
+all = ["openai", "anthropic", "google-generativeai"]
+
+[project.scripts]
+promptvc = "promptvc.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["promptvc*"]
