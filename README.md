@@ -677,7 +677,183 @@ $ promptvc config set models.openai "gpt-4o-mini"
 
 ---
 
-## 15. Roadmap
+## 15. Workflow Integration & DevOps Guides
+
+Integrating `promptvc` into your development lifecycle ensures that prompt adjustments are treated with the same validation rigor as traditional codebase changes.
+
+### 15.1 Day-to-Day Iteration Cycle
+For active development, the standard workflow cycle proceeds as follows:
+
+```mermaid
+graph TD
+    A["1. init / check status"] --> B["2. commit / edit template"]
+    B --> C["3. run / quick test"]
+    C --> D["4. test run / verify assertions"]
+    D --> E["5. lock / production release"]
+```
+
+1. **Initialize / Check Status**:
+   Ensure you have a configured workspace.
+   ```bash
+   promptvc init
+   promptvc status
+   ```
+2. **Draft & Commit**:
+   Commit your template with a description and optional variable schemas.
+   ```bash
+   promptvc commit sentiment_analyzer --prompt "Classify the sentiment of: {{text}}" --message "v1 base sentiment prompt"
+   ```
+3. **Execute & Debug**:
+   Run the prompt locally using the configured provider to verify outputs.
+   ```bash
+   promptvc run sentiment_analyzer latest --var text="This tool works beautifully!" --stream
+   ```
+4. **Define & Execute Test Suite**:
+   Run test suites to prevent regression or silent performance drift.
+   ```bash
+   promptvc test run sentiment_analyzer latest --suite tests/sentiment_suite.json
+   ```
+5. **Lock Version**:
+   Mark the tested version as read-only once verified, making it ready for production integration.
+   ```bash
+   promptvc lock sentiment_analyzer latest
+   ```
+
+---
+
+### 15.2 Local Git Hooks (Pre-commit Validation)
+You can prevent developers from committing broken prompts or regressions to the codebase by adding verification checks in git hooks.
+
+Create or edit `.git/hooks/pre-commit`:
+```bash
+#!/bin/sh
+echo "=== Running promptvc pre-commit hooks ==="
+
+# 1. Validate prompt schemas
+promptvc validate prompt sentiment_analyzer latest
+if [ $? -ne 0 ]; then
+  echo "❌ Prompt validation failed!"
+  exit 1
+fi
+
+# 2. Run assertion suites (Fail commit if average score falls below threshold)
+promptvc test run sentiment_analyzer latest --suite tests/sentiment_suite.json --non-interactive --threshold 0.85
+if [ $? -ne 0 ]; then
+  echo "❌ Regression detected or assertions failed! Aborting commit."
+  exit 1
+fi
+
+echo "✅ All prompt assertions passed."
+exit 0
+```
+Make the hook executable:
+```bash
+chmod +x .git/hooks/pre-commit
+```
+
+---
+
+### 15.3 Continuous Integration (GitHub Actions)
+You can integrate `promptvc` into your CI/CD pipeline to automatically execute assertion suites on every pull request.
+
+Create `.github/workflows/promptvc-verify.yml`:
+```yaml
+name: Verify Prompts
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install promptvc
+        run: |
+          pip install .
+
+      - name: Configure Defaults & Secrets
+        run: |
+          promptvc config set provider openai
+          promptvc config set api_keys.openai "${{ secrets.OPENAI_API_KEY }}"
+          promptvc config set models.openai "gpt-4o-mini"
+
+      - name: Run Test Assertions
+        run: |
+          # Fails pipeline execution (exit code 1) if criteria are not met
+          promptvc test run sentiment_analyzer latest --suite tests/sentiment_suite.json --non-interactive --threshold 0.80
+```
+
+---
+
+### 15.4 Web Application Runtime Integration (FastAPI Example)
+Avoid hardcoding prompts in python files. Keep your application clean and isolated by importing `promptvc` programmatically to resolve locked templates and run models dynamically.
+
+```python
+import os
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from promptvc.core import PromptRepo
+from promptvc.providers import get_provider
+from promptvc.utils.template import render_template
+from promptvc.config import get_config_value
+
+app = FastAPI()
+
+# 1. Instantiate the repository (looks for .promptvc in current directory)
+repo = PromptRepo()
+
+class AnalysisRequest(BaseModel):
+    text: str
+
+@app.post("/analyze-sentiment")
+async def analyze_sentiment(req: AnalysisRequest):
+    try:
+        # 2. Retrieve the locked production prompt template (e.g. pinned to v1)
+        prompt_template = repo.get("sentiment_analyzer", "v1")
+        
+        # 3. Inject application variables
+        rendered = render_template(prompt_template, {
+            "text": req.text
+        })
+        
+        # 4. Resolve the configured provider and execute
+        provider_name = get_config_value("provider", "openai")
+        provider = get_provider(provider_name)
+        result = provider.run(rendered)
+        
+        # 5. Log execution trace to promptvc registry
+        run_record = {
+            "version": "v1",
+            "output": result["output"],
+            "tokens": result["tokens"],
+            "timestamp": repo._utc_now_iso()
+        }
+        repo.storage.append_run("sentiment_analyzer", run_record)
+        
+        return {
+            "sentiment": result["output"].strip(),
+            "tokens_consumed": result["tokens"],
+            "timestamp": run_record["timestamp"]
+        }
+        
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+```
+
+---
+
+## 16. Roadmap
 
 * **Remote Registry Sync:** Implement commands to push and pull prompt spaces to cloud systems (PostgreSQL, S3) to support team environments.
 * **Scoring Dashboard:** Build local static site report generation detailing cost trends, latency performance, and test history graphs.
