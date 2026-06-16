@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from promptvc.utils.cost import compute_cost_breakdown, format_cost, CostBreakdown
+from promptvc.utils.cost import compute_cost_breakdown, format_cost
 
 
 @dataclass
