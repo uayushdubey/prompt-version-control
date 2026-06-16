@@ -76,11 +76,32 @@ class GeminiProvider(BaseProvider):
         temperature = kwargs.get("temperature")
         top_p = kwargs.get("top_p")
         top_k = kwargs.get("top_k")
-        system_prompt = kwargs.get("system_prompt")
-        timeout = kwargs.get("timeout", 60)
-        raw_messages = kwargs.get("messages")
+        # Build contents list
+        gemini_system = system_prompt
+        if raw_messages is not None:
+            gemini_contents = []
+            for msg in raw_messages:
+                role = msg.get("role")
+                content_text = msg.get("content", "")
+                if role == "system":
+                    if gemini_system:
+                        gemini_system += "\n" + content_text
+                    else:
+                        gemini_system = content_text
+                else:
+                    if role == "assistant":
+                        role = "model"
+                    elif role not in ("user", "model"):
+                        role = "user"
+                    gemini_contents.append({
+                        "role": role,
+                        "parts": [{"text": content_text}]
+                    })
+            content = gemini_contents
+        else:
+            content = prompt
 
-        model = self._get_model(model_name, system_prompt)
+        model = self._get_model(model_name, gemini_system)
 
         # Build generation config
         gen_config_kwargs: Dict[str, Any] = {}
@@ -98,9 +119,6 @@ class GeminiProvider(BaseProvider):
         }
         if gen_config_kwargs:
             generate_kwargs["generation_config"] = genai.types.GenerationConfig(**gen_config_kwargs)
-
-        # Use raw messages or plain prompt string
-        content = raw_messages if raw_messages is not None else prompt
 
         try:
             response = self._retry_with_backoff(

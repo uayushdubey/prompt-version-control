@@ -8,7 +8,13 @@ class MockProvider(BaseProvider):
         super().__init__(config)
 
     def run(self, prompt: str, **kwargs) -> dict:
+        raw_messages = kwargs.get("messages")
+        if raw_messages is not None:
+            import json
+            prompt_str = json.dumps(raw_messages)
+        else:
+            prompt_str = prompt
         return {
-            "output": prompt[::-1],
-            "tokens": len(prompt.split()),
+            "output": prompt_str[::-1],
+            "tokens": len(prompt_str.split()),
         }

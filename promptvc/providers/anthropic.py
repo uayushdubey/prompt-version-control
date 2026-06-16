@@ -68,7 +68,22 @@ class AnthropicProvider(BaseProvider):
 
         # Build messages list
         if raw_messages is not None:
-            messages = raw_messages
+            messages = []
+            anthropic_system = system_prompt
+            for msg in raw_messages:
+                if msg.get("role") == "system":
+                    if anthropic_system:
+                        anthropic_system += "\n" + msg.get("content", "")
+                    else:
+                        anthropic_system = msg.get("content", "")
+                else:
+                    role = msg.get("role", "user")
+                    if role in ("model", "assistant"):
+                        role = "assistant"
+                    else:
+                        role = "user"
+                    messages.append({"role": role, "content": msg.get("content", "")})
+            system_prompt = anthropic_system
         else:
             messages = [{"role": "user", "content": prompt}]
 

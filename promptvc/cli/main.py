@@ -35,6 +35,7 @@ from promptvc.core import (
     PromptFormat,
     render_prompt,
     messages_to_plain,
+    extract_variables_from_prompt,
     MatrixConfig,
     run_matrix_eval,
     format_matrix_table,
@@ -741,18 +742,20 @@ def run_command(args: argparse.Namespace) -> None:
     is_dry_run = getattr(args, "dry_run", False)
     is_non_interactive = getattr(args, "non_interactive", False)
 
+    fmt = prompt_data.get("format", "raw")
+
     if schema_vars:
         required_vars = {
             n for n, s in schema_vars.items()
             if s.get("required", False) and s.get("default") is None
         }
     else:
-        required_vars = extract_variables(raw_prompt)
+        required_vars = extract_variables_from_prompt(raw_prompt, fmt)
 
     if is_dry_run:
         missing = required_vars - set(variables.keys())
         try:
-            rendered_prompt = render_template(raw_prompt, variables)
+            rendered_prompt = render_prompt(raw_prompt, variables, fmt)
         except Exception:
             rendered_prompt = raw_prompt
         info_lines = [
@@ -764,7 +767,10 @@ def run_command(args: argparse.Namespace) -> None:
         print_box("Dry Run Preview", info_lines)
         safe_print()
         safe_print(dim("── Rendered Prompt ──────────────────────────────"))
-        safe_print(rendered_prompt)
+        if isinstance(rendered_prompt, list):
+            safe_print(json.dumps(rendered_prompt, indent=2, ensure_ascii=False))
+        else:
+            safe_print(rendered_prompt)
         safe_print(dim("─────────────────────────────────────────────────"))
         return
 
@@ -791,7 +797,7 @@ def run_command(args: argparse.Namespace) -> None:
         return
 
     variables = {**interactive_vars, **variables}
-    rendered_prompt = render_template(raw_prompt, variables)
+    rendered_prompt = render_prompt(raw_prompt, variables, fmt)
 
     unused = find_unused_variables(raw_prompt, variables)
     if unused:
@@ -808,9 +814,16 @@ def run_command(args: argparse.Namespace) -> None:
 
     trace_store = TraceStore(repo.storage._root)
 
+    provider_kwargs_copy = dict(provider_kwargs)
+    if isinstance(rendered_prompt, list):
+        provider_kwargs_copy["messages"] = rendered_prompt
+        prompt_param = ""
+    else:
+        prompt_param = rendered_prompt
+
     try:
         with spinner(f"Running {args.name} @ {version} via {provider_name}…"):
-            result = provider.run(rendered_prompt, **provider_kwargs)
+            result = provider.run(prompt_param, **provider_kwargs_copy)
     except Exception as exc:
         error_msg = str(exc)
         print_error_panel(
@@ -973,6 +986,7 @@ def eval_command(args: argparse.Namespace) -> None:
     if raw_prompt is None:
         print_error_panel(f"'{args.name}@{version}' has no prompt text.")
         return
+    fmt = prompt_data.get("format", "raw")
 
     try:
         with open(args.dataset, "r", encoding="utf-8") as f:
@@ -1008,7 +1022,7 @@ def eval_command(args: argparse.Namespace) -> None:
 
         variables: Dict[str, Any] = row
         try:
-            rendered_prompt = render_template(raw_prompt, variables)
+            rendered_prompt = render_prompt(raw_prompt, variables, fmt)
         except Exception as exc:
             safe_print(warning(f"  ⚠  Row {i} template error: {exc}"))
             continue
@@ -1017,10 +1031,17 @@ def eval_command(args: argparse.Namespace) -> None:
         if unused:
             safe_print(warning(f"  ⚠  Row {i}: unused vars: {', '.join(sorted(unused))}"))
 
+        provider_kwargs_copy = dict(provider_kwargs)
+        if isinstance(rendered_prompt, list):
+            provider_kwargs_copy["messages"] = rendered_prompt
+            prompt_param = ""
+        else:
+            prompt_param = rendered_prompt
+
         t0 = time.monotonic()
         try:
             with spinner(f"  [{i}/{len(dataset)}] Running case {i}…"):
-                result = provider.run(rendered_prompt, **provider_kwargs)
+                result = provider.run(prompt_param, **provider_kwargs_copy)
         except Exception as exc:
             safe_print(warning(f"  ✗  Case {i} failed: {exc}"))
             continue
@@ -1126,8 +1147,12 @@ def compare_command(args: argparse.Namespace) -> None:
             )
             return
 
-    prompt_v1 = repo.get_version_meta(args.name, args.v1).get("prompt", "")
-    prompt_v2 = repo.get_version_meta(args.name, args.v2).get("prompt", "")
+    meta_v1 = repo.get_version_meta(args.name, args.v1)
+    meta_v2 = repo.get_version_meta(args.name, args.v2)
+    prompt_v1 = meta_v1.get("prompt", "")
+    prompt_v2 = meta_v2.get("prompt", "")
+    fmt_v1 = meta_v1.get("format", "raw")
+    fmt_v2 = meta_v2.get("format", "raw")
 
     try:
         with open(args.dataset, "r", encoding="utf-8") as f:
@@ -1155,21 +1180,35 @@ def compare_command(args: argparse.Namespace) -> None:
         variables: Dict[str, Any] = row
 
         try:
-            rendered_v1 = render_template(prompt_v1, variables)
-            rendered_v2 = render_template(prompt_v2, variables)
+            rendered_v1 = render_prompt(prompt_v1, variables, fmt_v1)
+            rendered_v2 = render_prompt(prompt_v2, variables, fmt_v2)
         except Exception as exc:
             safe_print(warning(f"  ⚠  Row {i} template error: {exc}"))
             continue
 
+        provider_kwargs_v1 = dict(provider_kwargs)
+        if isinstance(rendered_v1, list):
+            provider_kwargs_v1["messages"] = rendered_v1
+            prompt_param_v1 = ""
+        else:
+            prompt_param_v1 = rendered_v1
+
+        provider_kwargs_v2 = dict(provider_kwargs)
+        if isinstance(rendered_v2, list):
+            provider_kwargs_v2["messages"] = rendered_v2
+            prompt_param_v2 = ""
+        else:
+            prompt_param_v2 = rendered_v2
+
         try:
             with spinner(f"  [{i}/{len(dataset)}] Running case {i} ({args.v1})…"):
                 t0 = time.monotonic()
-                result_v1 = provider.run(rendered_v1, **provider_kwargs)
+                result_v1 = provider.run(prompt_param_v1, **provider_kwargs_v1)
                 lat_v1 = (time.monotonic() - t0) * 1000
 
             with spinner(f"  [{i}/{len(dataset)}] Running case {i} ({args.v2})…"):
                 t0 = time.monotonic()
-                result_v2 = provider.run(rendered_v2, **provider_kwargs)
+                result_v2 = provider.run(prompt_param_v2, **provider_kwargs_v2)
                 lat_v2 = (time.monotonic() - t0) * 1000
         except Exception as exc:
             safe_print(warning(f"  ✗  Case {i} failed: {exc}"))
@@ -1704,7 +1743,8 @@ def _run_test_suite_internal(
     golden_dir: str,
     args: argparse.Namespace,
     version_label: str,
-    silent: bool = False
+    silent: bool = False,
+    fmt: str = "raw"
 ) -> list[CaseResult]:
     case_results = []
     for i, case in enumerate(suite, start=1):
@@ -1712,18 +1752,25 @@ def _run_test_suite_internal(
         input_vars = case.get("input", {})
 
         try:
-            rendered = render_template(raw_prompt, input_vars)
+            rendered = render_prompt(raw_prompt, input_vars, fmt)
         except Exception as exc:
             if not silent:
                 safe_print(warning(f"  ⚠  {case_id} ({version_label}): template error — {exc}"))
             continue
 
+        provider_kwargs_copy = dict(provider_kwargs)
+        if isinstance(rendered, list):
+            provider_kwargs_copy["messages"] = rendered
+            prompt_param = ""
+        else:
+            prompt_param = rendered
+
         try:
             if not silent:
                 with spinner(f"  [{i}/{len(suite)}] {case_id} ({version_label})…"):
-                    result = provider.run(rendered, **provider_kwargs)
+                    result = provider.run(prompt_param, **provider_kwargs_copy)
             else:
-                result = provider.run(rendered, **provider_kwargs)
+                result = provider.run(prompt_param, **provider_kwargs_copy)
         except Exception as exc:
             if not silent:
                 safe_print(warning(f"  ✗  {case_id} ({version_label}): provider failed — {exc}"))
@@ -1813,8 +1860,10 @@ def test_run_command(args: argparse.Namespace) -> None:
     safe_print(dim(f"  Provider : {provider_name}" + (f" / {model}" if model else "")))
     safe_print()
 
+    fmt = prompt_data.get("format", "raw")
+
     current_results = _run_test_suite_internal(
-        suite, raw_prompt, provider, provider_kwargs, golden_dir, args, version_label=args.version, silent=False
+        suite, raw_prompt, provider, provider_kwargs, golden_dir, args, version_label=args.version, silent=False, fmt=fmt
     )
 
     if compare_version:
@@ -1828,8 +1877,10 @@ def test_run_command(args: argparse.Namespace) -> None:
             sys.exit(1)
         raw_prompt_compare = compare_data.get("prompt", "")
 
+        compare_fmt = compare_data.get("format", "raw")
+
         base_results = _run_test_suite_internal(
-            suite, raw_prompt_compare, provider, provider_kwargs, golden_dir, args, version_label=compare_version, silent=True
+            suite, raw_prompt_compare, provider, provider_kwargs, golden_dir, args, version_label=compare_version, silent=True, fmt=compare_fmt
         )
 
         current_by_id = {cr.case_id: cr for cr in current_results}
@@ -1997,6 +2048,7 @@ def test_golden_command(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     raw_prompt = prompt_data.get("prompt", "")
+    fmt = prompt_data.get("format", "raw")
 
     suite_path = args.suite
     try:
@@ -2025,14 +2077,21 @@ def test_golden_command(args: argparse.Namespace) -> None:
             continue
 
         try:
-            rendered = render_template(raw_prompt, input_vars)
+            rendered = render_prompt(raw_prompt, input_vars, fmt)
         except Exception as exc:
             safe_print(warning(f"  ⚠  {case_id}: template error — {exc}"))
             continue
 
+        provider_kwargs_copy = dict(provider_kwargs)
+        if isinstance(rendered, list):
+            provider_kwargs_copy["messages"] = rendered
+            prompt_param = ""
+        else:
+            prompt_param = rendered
+
         try:
             with spinner(f"  [{i}/{len(suite)}] Running {case_id}…"):
-                result = provider.run(rendered, **provider_kwargs)
+                result = provider.run(prompt_param, **provider_kwargs_copy)
         except Exception as exc:
             safe_print(warning(f"  ✗  {case_id}: failed — {exc}"))
             continue
@@ -2186,8 +2245,9 @@ def _cmd_run(session: ShellSession) -> None:
         return
 
     raw_prompt = prompt_data.get("prompt", "")
+    fmt = prompt_data.get("format", "raw")
 
-    required = extract_variables(raw_prompt)
+    required = extract_variables_from_prompt(raw_prompt, fmt)
     missing  = required - set(session.variables.keys())
     if missing:
         safe_print(warning(f"  ⚠  Missing variables: {', '.join(sorted(missing))}"))
@@ -2195,7 +2255,7 @@ def _cmd_run(session: ShellSession) -> None:
         return
 
     try:
-        rendered = render_template(raw_prompt, session.variables)
+        rendered = render_prompt(raw_prompt, session.variables, fmt)
     except Exception as exc:
         safe_print(warning(f"  ✗ Template error: {exc}"))
         return
@@ -2211,9 +2271,16 @@ def _cmd_run(session: ShellSession) -> None:
         safe_print(warning(f"  ✗ Provider error: {exc}"))
         return
 
+    kwargs_copy = dict(kwargs)
+    if isinstance(rendered, list):
+        kwargs_copy["messages"] = rendered
+        prompt_param = ""
+    else:
+        prompt_param = rendered
+
     t0 = time.monotonic()
     try:
-        result = provider.run(rendered, **kwargs)
+        result = provider.run(prompt_param, **kwargs_copy)
     except Exception as exc:
         safe_print(warning(f"  ✗ Provider failed: {exc}"))
         return

@@ -48,6 +48,7 @@ from promptvc.core.repo import PromptRepo
 from promptvc.providers import get_provider
 from promptvc.utils.cost import compute_cost_breakdown, format_cost, CostBreakdown
 from promptvc.utils.template import render_template
+from promptvc.core.prompt_format import render_prompt
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -147,7 +148,9 @@ def _execute_run(
     resolved_version = _resolve_version(repo, name, version)
 
     try:
-        raw_prompt = repo.get(name, resolved_version)
+        version_meta = repo.get_version_meta(name, resolved_version)
+        raw_prompt = version_meta.get("prompt", "")
+        fmt = version_meta.get("format", "raw")
     except Exception as e:
         return RunResult(
             output="", tokens=None, input_tokens=None, output_tokens=None,
@@ -157,7 +160,7 @@ def _execute_run(
         )
 
     try:
-        rendered = render_template(raw_prompt, {k: str(v) for k, v in variables.items()})
+        rendered = render_prompt(raw_prompt, {k: str(v) for k, v in variables.items()}, fmt)
     except Exception as e:
         return RunResult(
             output="", tokens=None, input_tokens=None, output_tokens=None,
@@ -176,9 +179,16 @@ def _execute_run(
             variables=variables, error=f"Provider error: {e}",
         )
 
+    provider_kwargs_copy = dict(provider_kwargs)
+    if isinstance(rendered, list):
+        provider_kwargs_copy["messages"] = rendered
+        prompt_param = ""
+    else:
+        prompt_param = rendered
+
     t0 = time.monotonic()
     try:
-        result = provider.run(rendered, **provider_kwargs)
+        result = provider.run(prompt_param, **provider_kwargs_copy)
         latency_ms = round((time.monotonic() - t0) * 1000, 1)
     except Exception as e:
         return RunResult(
