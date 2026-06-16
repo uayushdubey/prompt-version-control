@@ -97,6 +97,8 @@ class PromptRepo:
         prompt: str,
         message: str,
         schema: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        fmt: str = "raw",
     ) -> Dict[str, Any]:
         return {
             "id": version_id,
@@ -107,6 +109,8 @@ class PromptRepo:
             "locked": False,
             "hash": self._sha256(prompt),
             "schema": schema or {},
+            "tags": tags or [],
+            "format": fmt,
         }
 
     def commit(
@@ -115,9 +119,19 @@ class PromptRepo:
             prompt: str,
             message: str,
             schema: Optional[Dict[str, Any]] = None,
+            tags: Optional[List[str]] = None,
+            fmt: str = "raw",
     ) -> Dict[str, Any]:
         """
         Create a new immutable version of a prompt.
+
+        Args:
+            name:    Prompt space name.
+            prompt:  Prompt text (or JSON-encoded chat messages for fmt='chat').
+            message: Human-readable commit message.
+            schema:  Optional variable schema dict.
+            tags:    Optional list of tag strings for search/filter.
+            fmt:     Prompt format: 'raw' (default), 'chat', or 'instruction'.
 
         Returns:
             Dict[str, Any]: Metadata of the created version.
@@ -135,6 +149,11 @@ class PromptRepo:
         if schema is not None:
             self._validate_schema(schema)
 
+        # Normalize tags
+        clean_tags: List[str] = []
+        if tags:
+            clean_tags = [t.strip().lower() for t in tags if t and t.strip()]
+
         space = self.storage.load_or_create_space(name)
         version_id = self.storage.next_version_id(space)
 
@@ -143,6 +162,8 @@ class PromptRepo:
             prompt=prompt,
             message=message,
             schema=schema,
+            tags=clean_tags,
+            fmt=fmt,
         )
 
         space["versions"][version_id] = version_data
@@ -362,6 +383,121 @@ class PromptRepo:
     def list_spaces(self) -> List[str]:
         """Return names of all prompt spaces."""
         return self.storage.list_space_names()
+
+    # -------------------------
+    # Tagging & Search
+    # -------------------------
+
+    def tag_version(
+        self,
+        name: str,
+        version: str,
+        tags: List[str],
+        replace: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Add tags to an existing version.
+
+        Args:
+            name:    Prompt space name.
+            version: Version ID.
+            tags:    List of tag strings to add.
+            replace: If True, replace existing tags entirely.
+
+        Returns:
+            Updated version metadata dict.
+
+        Raises:
+            VersionNotFoundError: If version doesn't exist.
+            VersionLockedError: If version is locked.
+        """
+        name = self._normalize_name(name)
+        version = self._normalize_version(version)
+
+        space = self.storage.load_space(name)
+        version_data = self.storage.get_version(name, version)
+
+        self.lock_guard.assert_mutable(version_data, name, version)
+
+        new_tags = [t.strip().lower() for t in tags if t and t.strip()]
+        if replace:
+            version_data["tags"] = new_tags
+        else:
+            existing = set(version_data.get("tags") or [])
+            version_data["tags"] = sorted(existing | set(new_tags))
+
+        space["versions"][version] = version_data
+        self.storage.save_space(name, space)
+        return version_data
+
+    def find_by_tag(self, tag: str) -> List[Dict[str, Any]]:
+        """
+        Return all versions across all spaces that have the given tag.
+
+        Returns:
+            List of dicts: [{space: str, version_data: dict}, ...]
+        """
+        tag = tag.strip().lower()
+        matches = []
+        for space_name in self.storage.list_space_names():
+            try:
+                space = self.storage.load_space(space_name)
+            except Exception:
+                continue
+            for ver_data in space.get("versions", {}).values():
+                if tag in (ver_data.get("tags") or []):
+                    matches.append({"space": space_name, **ver_data})
+        return matches
+
+    def search(
+        self,
+        query: str,
+        *,
+        search_prompt: bool = True,
+        search_message: bool = True,
+        search_tags: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        Full-text search across all prompt spaces and versions.
+
+        Matches against: prompt text, commit message, tags.
+        Case-insensitive substring search.
+
+        Args:
+            query:          Search string.
+            search_prompt:  Include prompt text in search. Default: True.
+            search_message: Include commit messages in search. Default: True.
+            search_tags:    Include tags in search. Default: True.
+
+        Returns:
+            List of matching version dicts with added 'space' key.
+        """
+        q = query.strip().lower()
+        if not q:
+            return []
+
+        matches = []
+        for space_name in self.storage.list_space_names():
+            try:
+                space = self.storage.load_space(space_name)
+            except Exception:
+                continue
+
+            for ver_data in space.get("versions", {}).values():
+                hit = False
+                if search_prompt and q in (ver_data.get("prompt") or "").lower():
+                    hit = True
+                if not hit and search_message and q in (ver_data.get("message") or "").lower():
+                    hit = True
+                if not hit and search_tags:
+                    for tag in (ver_data.get("tags") or []):
+                        if q in tag:
+                            hit = True
+                            break
+                if hit:
+                    matches.append({"space": space_name, **ver_data})
+
+        return matches
 
     # -------------------------
     # Locking

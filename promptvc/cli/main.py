@@ -32,6 +32,18 @@ from promptvc.core import (
     compare_versions,
     validate_dataset,
     validate_prompt,
+    PromptFormat,
+    render_prompt,
+    messages_to_plain,
+    MatrixConfig,
+    run_matrix_eval,
+    format_matrix_table,
+    save_matrix_report,
+    compute_space_analytics,
+    compute_global_analytics,
+    BudgetGuard,
+    BudgetExceededError,
+    get_session_guard,
 )
 from promptvc.config import (
     load_config,
@@ -65,8 +77,12 @@ from promptvc.utils.console import (
     _colorize,
     Color,
 )
-from promptvc.utils.cost import estimate_cost, format_cost, format_latency
+from promptvc.utils.cost import (
+    estimate_cost, format_cost, format_latency,
+    compute_cost_breakdown, format_cost_breakdown, CostBreakdown,
+)
 from promptvc.utils.diff import compute_diff, apply_unified_diff
+from promptvc.security.secrets import SecretsStore, SecretsError
 
 Handler = Callable[[argparse.Namespace], None]
 
@@ -2641,6 +2657,429 @@ def trace_command(args: argparse.Namespace) -> None:
         safe_print()
 
 
+# ── Matrix Evaluation Command ──────────────────────────────────────────────────────
+
+def matrix_command(args: argparse.Namespace) -> None:
+    """Run N versions × M test cases and show a comparison matrix."""
+    repo = get_repo()
+    if repo is None:
+        return
+
+    provider_name = (
+        getattr(args, "provider", None)
+        or get_config_value("provider")
+        or "mock"
+    )
+    try:
+        provider = get_provider(provider_name)
+    except Exception:
+        print_error_panel(f"Unknown provider '{provider_name}'")
+        return
+
+    model = getattr(args, "model", None) or get_config_value(f"models.{provider_name}")
+
+    config = MatrixConfig(
+        name=args.name,
+        versions=args.versions,
+        dataset_path=args.dataset,
+        provider_name=provider_name,
+        model=model,
+        deterministic=getattr(args, "deterministic", True),
+    )
+
+    safe_print()
+    safe_print(bold(f"  Matrix Evaluation: {args.name}"))
+    safe_print(dim(f"  Versions: {', '.join(args.versions)}"))
+    safe_print(dim(f"  Dataset : {args.dataset}"))
+    safe_print(dim(f"  Provider: {provider_name}"))
+    safe_print()
+
+    with spinner("Running matrix evaluation…"):
+        try:
+            result = run_matrix_eval(config, provider=provider, repo=repo)
+        except Exception as exc:
+            print_error_panel(f"Matrix evaluation failed: {exc}")
+            return
+
+    safe_print(format_matrix_table(result))
+    safe_print()
+
+    # Winner announcement
+    if result.winner:
+        safe_print(success(f"  ★ Winner: {result.winner}"))
+        stats = result.get_stats(result.winner)
+        if stats:
+            safe_print(dim(f"    Mean score: {stats.mean_score:.3f}  |  "
+                          f"Pass rate: {stats.pass_rate * 100:.0f}%  |  "
+                          f"Avg latency: {stats.avg_latency_ms:.0f}ms"))
+    safe_print()
+
+    # Save report if requested
+    report_path = getattr(args, "save_report", None)
+    if report_path:
+        try:
+            save_matrix_report(result, report_path)
+            safe_print(success(f"  ✓ Report saved to: {report_path}"))
+        except Exception as exc:
+            safe_print(warning(f"  ⚠ Failed to save report: {exc}"))
+    safe_print()
+
+
+# ── Analytics Command ──────────────────────────────────────────────────────────────
+
+def analytics_command(args: argparse.Namespace) -> None:
+    """Show usage analytics and cost dashboard."""
+    repo = get_repo()
+    if repo is None:
+        return
+
+    output_json = getattr(args, "json", False)
+    space_name = getattr(args, "name", None)
+
+    if space_name:
+        # Per-space analytics
+        try:
+            space_data = repo.storage.load_space(space_name)
+        except Exception as exc:
+            print_error_panel(f"Space '{space_name}' not found: {exc}")
+            return
+
+        stats = compute_space_analytics(space_name, repo.storage._root, space_data)
+
+        if output_json:
+            import dataclasses
+            safe_print(json.dumps({
+                "name": stats.name,
+                "total_runs": stats.total_runs,
+                "total_tokens": stats.total_tokens,
+                "total_cost_usd": stats.total_cost_usd,
+                "avg_score": stats.avg_score,
+                "latency_p50_ms": stats.latency.p50_ms if stats.latency else None,
+                "latency_p95_ms": stats.latency.p95_ms if stats.latency else None,
+            }, indent=2))
+            return
+
+        safe_print()
+        info_lines = [
+            badge("Space       ", space_name),
+            badge("Total Runs  ", str(stats.total_runs)),
+            badge("Total Tokens", f"{stats.total_tokens:,}"),
+            badge("Total Cost  ", format_cost(stats.total_cost_usd)),
+            badge("Avg Score   ", f"{stats.avg_score:.3f}" if stats.avg_score else "—"),
+        ]
+        if stats.latency:
+            info_lines += [
+                badge("Latency p50 ", f"{stats.latency.p50_ms:.0f}ms"),
+                badge("Latency p95 ", f"{stats.latency.p95_ms:.0f}ms"),
+            ]
+        print_box(f"Analytics  {space_name}", info_lines)
+
+        if stats.model_breakdown:
+            safe_print()
+            safe_print(bold("  Model Usage"))
+            rows = [
+                [m.model, str(m.run_count), f"{m.total_tokens:,}", format_cost(m.total_cost_usd)]
+                for m in stats.model_breakdown
+            ]
+            print_table(["Model", "Runs", "Tokens", "Cost"], rows)
+
+        if stats.version_breakdown:
+            safe_print()
+            safe_print(bold("  Per-Version Stats"))
+            rows = [
+                [
+                    v.version,
+                    str(v.run_count),
+                    f"{v.avg_tokens:.0f}" if v.avg_tokens else "—",
+                    f"{v.avg_latency_ms:.0f}ms" if v.avg_latency_ms else "—",
+                    f"{v.avg_score:.3f}" if v.avg_score else "—",
+                ]
+                for v in stats.version_breakdown
+            ]
+            print_table(["Version", "Runs", "Avg Tokens", "Avg Latency", "Avg Score"], rows)
+        safe_print()
+
+    else:
+        # Global analytics
+        global_stats = compute_global_analytics(repo.storage._root, repo.storage)
+
+        if output_json:
+            safe_print(json.dumps({
+                "total_spaces": global_stats.total_spaces,
+                "total_versions": global_stats.total_versions,
+                "total_runs": global_stats.total_runs,
+                "total_tokens": global_stats.total_tokens,
+                "total_cost_usd": global_stats.total_cost_usd,
+                "avg_latency_ms": global_stats.avg_latency_ms,
+            }, indent=2))
+            return
+
+        safe_print()
+        info_lines = [
+            badge("Spaces      ", str(global_stats.total_spaces)),
+            badge("Versions    ", str(global_stats.total_versions)),
+            badge("Total Runs  ", str(global_stats.total_runs)),
+            badge("Total Tokens", f"{global_stats.total_tokens:,}"),
+            badge("Total Cost  ", format_cost(global_stats.total_cost_usd)),
+            badge("Avg Latency ", format_latency(global_stats.avg_latency_ms)),
+        ]
+        print_box("Global Analytics", info_lines)
+
+        if global_stats.top_spaces_by_runs:
+            safe_print()
+            safe_print(bold("  Top Spaces by Runs"))
+            rows = [[name, str(count)] for name, count in global_stats.top_spaces_by_runs]
+            print_table(["Space", "Runs"], rows)
+
+        if global_stats.model_breakdown:
+            safe_print()
+            safe_print(bold("  Model Breakdown"))
+            rows = [
+                [m.model, str(m.run_count), f"{m.total_tokens:,}", format_cost(m.total_cost_usd)]
+                for m in global_stats.model_breakdown
+            ]
+            print_table(["Model", "Runs", "Tokens", "Cost"], rows)
+        safe_print()
+
+
+# ── Secrets Command ────────────────────────────────────────────────────────────────
+
+def secrets_command(args: argparse.Namespace) -> None:
+    """Manage encrypted API keys."""
+    repo = PromptRepo()
+    store = SecretsStore(repo.storage._root)
+
+    if not store.is_available:
+        print_error_panel(
+            "The 'cryptography' package is required for secrets management.",
+            tips=["Install with: pip install promptvc[secrets]"],
+        )
+        return
+
+    sub = args.secrets_subcommand
+
+    if sub == "set":
+        service = args.service.strip().lower()
+        value = getattr(args, "value", None)
+        if not value:
+            try:
+                import getpass
+                value = getpass.getpass(dim(f"  Enter API key for '{service}': "))
+            except (KeyboardInterrupt, EOFError):
+                safe_print(warning("\n  Cancelled."))
+                return
+        if not value:
+            print_error_panel("API key cannot be empty.")
+            return
+        try:
+            store.set(service, value)
+            safe_print(success(f"  ✓ API key for '{service}' stored (encrypted)."))
+            safe_print(dim(f"    Stored in: {store._path}"))
+        except Exception as exc:
+            print_error_panel(f"Failed to store secret: {exc}")
+
+    elif sub == "get":
+        service = args.service.strip().lower()
+        try:
+            key = store.get(service)
+            if key:
+                masked = key[:4] + "*" * (len(key) - 8) + key[-4:] if len(key) > 8 else "***"
+                safe_print(success(f"  ✓ API key for '{service}': {masked}"))
+            else:
+                safe_print(warning(f"  No key stored for '{service}'."))
+                safe_print(dim(f"  Hint: promptvc secrets set {service} <key>"))
+        except Exception as exc:
+            print_error_panel(f"Failed to retrieve secret: {exc}")
+
+    elif sub == "delete":
+        service = args.service.strip().lower()
+        try:
+            deleted = store.delete(service)
+            if deleted:
+                safe_print(success(f"  ✓ API key for '{service}' deleted."))
+            else:
+                safe_print(warning(f"  No key stored for '{service}'."))
+        except Exception as exc:
+            print_error_panel(f"Failed to delete secret: {exc}")
+
+    elif sub == "list":
+        try:
+            services = store.list_services()
+            if not services:
+                safe_print(dim("  No secrets stored."))
+                safe_print(dim("  Hint: promptvc secrets set openai <key>"))
+            else:
+                safe_print()
+                safe_print(bold("  Stored Services"))
+                rows = [[s, "●●●● (encrypted)"] for s in services]
+                print_table(["Service", "Key"], rows)
+                safe_print()
+        except Exception as exc:
+            print_error_panel(f"Failed to list secrets: {exc}")
+
+
+# ── Search Command ─────────────────────────────────────────────────────────────────
+
+def search_command(args: argparse.Namespace) -> None:
+    """Full-text search across all prompt spaces."""
+    repo = get_repo()
+    if repo is None:
+        return
+
+    query = args.query.strip()
+    tags_only = getattr(args, "tags_only", False)
+    output_json = getattr(args, "json", False)
+
+    results = repo.search(
+        query,
+        search_prompt=not tags_only,
+        search_message=not tags_only,
+        search_tags=True,
+    )
+
+    if output_json:
+        safe_print(json.dumps([
+            {"space": r.get("space"), "version": r.get("id"), "message": r.get("message"),
+             "tags": r.get("tags", []), "timestamp": r.get("timestamp")}
+            for r in results
+        ], indent=2))
+        return
+
+    safe_print()
+    if not results:
+        safe_print(dim(f"  No results for '{query}'."))
+        return
+
+    safe_print(bold(f"  Search: '{query}' — {len(results)} result(s)"))
+    safe_print()
+    rows = []
+    for r in results:
+        tags_str = ", ".join(r.get("tags") or []) or "—"
+        date = (r.get("timestamp") or "").split("T")[0] or "—"
+        msg = (r.get("message") or "")[:48]
+        rows.append([r.get("space", ""), r.get("id", ""), msg, tags_str, date])
+
+    print_table(["Space", "Version", "Message", "Tags", "Date"], rows)
+    safe_print()
+
+
+# ── Tag Command ────────────────────────────────────────────────────────────────────
+
+def tag_command(args: argparse.Namespace) -> None:
+    """Add tags to a prompt version."""
+    repo = get_repo()
+    if repo is None:
+        return
+
+    try:
+        updated = repo.tag_version(
+            name=args.name,
+            version=args.version,
+            tags=args.tags,
+            replace=getattr(args, "replace", False),
+        )
+        tag_list = ", ".join(updated.get("tags") or [])
+        safe_print(success(f"  ✓ Tags updated for {args.name} @ {args.version}"))
+        safe_print(dim(f"    Tags: {tag_list or '(none)'}"))
+    except Exception as exc:
+        print_error_panel(f"Failed to tag version: {exc}")
+
+
+# ── Export Command ─────────────────────────────────────────────────────────────────
+
+def export_command(args: argparse.Namespace) -> None:
+    """Export prompt space(s) to a JSON file."""
+    repo = get_repo()
+    if repo is None:
+        return
+
+    output_path = args.output
+    export_all = getattr(args, "all", False)
+    space_name = getattr(args, "name", None)
+
+    if export_all or not space_name:
+        spaces = repo.list_spaces()
+    else:
+        spaces = [space_name]
+
+    if not spaces:
+        safe_print(warning("  No spaces found to export."))
+        return
+
+    export_data: Dict[str, Any] = {
+        "promptvc_export_version": "1",
+        "exported_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+        "spaces": {},
+    }
+
+    for name in spaces:
+        try:
+            space_data = repo.storage.load_space(name)
+            export_data["spaces"][name] = space_data
+        except Exception as exc:
+            safe_print(warning(f"  ⚠ Skipping '{name}': {exc}"))
+
+    try:
+        import os
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+        safe_print(success(f"  ✓ Exported {len(export_data['spaces'])} space(s) to: {output_path}"))
+    except Exception as exc:
+        print_error_panel(f"Export failed: {exc}")
+
+
+# ── Import Command ─────────────────────────────────────────────────────────────────
+
+def import_command(args: argparse.Namespace) -> None:
+    """Import prompt space(s) from an exported JSON file."""
+    repo = get_repo()
+    if repo is None:
+        return
+
+    file_path = args.file
+    overwrite = getattr(args, "overwrite", False)
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print_error_panel(f"File not found: {file_path}")
+        return
+    except json.JSONDecodeError as exc:
+        print_error_panel(f"Invalid JSON in file: {exc}")
+        return
+
+    if "spaces" not in data:
+        print_error_panel(
+            "Invalid export file format.",
+            tips=["Expected a file created by: promptvc export"]
+        )
+        return
+
+    spaces = data["spaces"]
+    imported = 0
+    skipped = 0
+
+    for name, space_data in spaces.items():
+        existing = name in repo.list_spaces()
+        if existing and not overwrite:
+            safe_print(warning(f"  ⚠ Skipping '{name}' (already exists). Use --overwrite to replace."))
+            skipped += 1
+            continue
+        try:
+            repo.storage.save_space(name, space_data)
+            action = "Updated" if existing else "Imported"
+            safe_print(success(f"  ✓ {action}: {name}"))
+            imported += 1
+        except Exception as exc:
+            safe_print(warning(f"  ⚠ Failed to import '{name}': {exc}"))
+
+    safe_print()
+    safe_print(bold(f"  Import complete: {imported} imported, {skipped} skipped."))
+    safe_print()
+
+
 # ── Parser Build & Main Router ───────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2837,31 +3276,93 @@ Examples:
     trace_p.add_argument("--last", type=int, default=20, help="Number of traces to show (default: 20)")
     trace_p.add_argument("--json", action="store_true", help="Output raw traces in JSON format")
 
+    # matrix
+    matrix_p = subparsers.add_parser("matrix", help="A/B test N versions against M test cases")
+    matrix_p.add_argument("name", type=str, help="Prompt space name")
+    matrix_p.add_argument("versions", nargs="+", help="Version IDs to compare (e.g. v1 v2 v3)")
+    matrix_p.add_argument("--dataset", required=True, type=str, help="Path to test dataset JSON")
+    matrix_p.add_argument("--provider", type=str, default=None)
+    matrix_p.add_argument("--model", type=str)
+    matrix_p.add_argument("--save-report", type=str, default=None, help="Save JSON report to this path")
+    matrix_p.add_argument("--deterministic", action="store_true", help="Disable LLM judge")
+
+    # analytics
+    analytics_p = subparsers.add_parser("analytics", help="Show usage analytics and cost dashboard")
+    analytics_p.add_argument("name", nargs="?", type=str, help="Prompt space name (omit for global)")
+    analytics_p.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # secrets
+    secrets_p = subparsers.add_parser("secrets", help="Manage encrypted API keys")
+    secrets_sub = secrets_p.add_subparsers(dest="secrets_subcommand", required=True)
+
+    sec_set = secrets_sub.add_parser("set", help="Store an encrypted API key")
+    sec_set.add_argument("service", type=str, help="Provider name (e.g. openai, anthropic)")
+    sec_set.add_argument("value", type=str, nargs="?", help="API key (prompted if omitted)")
+
+    sec_get = secrets_sub.add_parser("get", help="Retrieve an API key (masked)")
+    sec_get.add_argument("service", type=str)
+
+    sec_del = secrets_sub.add_parser("delete", help="Delete a stored API key")
+    sec_del.add_argument("service", type=str)
+
+    secrets_sub.add_parser("list", help="List stored service names")
+
+    # search
+    search_p = subparsers.add_parser("search", help="Full-text search across all prompt spaces")
+    search_p.add_argument("query", type=str, help="Search query")
+    search_p.add_argument("--tags-only", action="store_true", help="Search tags only")
+    search_p.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # tag
+    tag_p = subparsers.add_parser("tag", help="Add tags to a prompt version")
+    tag_p.add_argument("name", type=str)
+    tag_p.add_argument("version", type=str)
+    tag_p.add_argument("tags", nargs="+", help="Tags to add")
+    tag_p.add_argument("--replace", action="store_true", help="Replace existing tags")
+
+    # export
+    export_p = subparsers.add_parser("export", help="Export prompt space(s) to a JSON file")
+    export_p.add_argument("name", nargs="?", type=str, help="Space name (omit for all spaces)")
+    export_p.add_argument("--output", "-o", type=str, required=True, help="Output file path")
+    export_p.add_argument("--all", action="store_true", help="Export all spaces")
+
+    # import
+    import_p = subparsers.add_parser("import", help="Import prompt space(s) from a JSON file")
+    import_p.add_argument("file", type=str, help="Path to exported JSON file")
+    import_p.add_argument("--overwrite", action="store_true", help="Overwrite existing spaces")
+
     return parser
 
 
 def _build_handler_map() -> Dict[str, Handler]:
     return {
-        "init":    handle_init,
-        "status":  status_command,
-        "commit":  commit_command,
-        "log":     log_command,
-        "get":     get_command,
-        "inspect": inspect_command,
-        "diff":    diff_command,
-        "lock":    lock_command,
-        "list":    list_command,
-        "run":     run_command,
-        "eval":    eval_command,
-        "compare": compare_command,
-        "apply":   apply_command,
-        "changes": changes_command,
-        "config":  config_command,
-        "test":    test_command,
-        "shell":   shell_command,
-        "pipe":    pipe_command,
-        "validate": validate_command,
-        "trace":    trace_command,
+        "init":      handle_init,
+        "status":    status_command,
+        "commit":    commit_command,
+        "log":       log_command,
+        "get":       get_command,
+        "inspect":   inspect_command,
+        "diff":      diff_command,
+        "lock":      lock_command,
+        "list":      list_command,
+        "run":       run_command,
+        "eval":      eval_command,
+        "compare":   compare_command,
+        "apply":     apply_command,
+        "changes":   changes_command,
+        "config":    config_command,
+        "test":      test_command,
+        "shell":     shell_command,
+        "pipe":      pipe_command,
+        "validate":  validate_command,
+        "trace":     trace_command,
+        "matrix":    matrix_command,
+        "analytics": analytics_command,
+        "secrets":   secrets_command,
+        "search":    search_command,
+        "tag":       tag_command,
+        "export":    export_command,
+        "import":    import_command,
     }
 
 
