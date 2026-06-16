@@ -53,27 +53,27 @@ The following diagram illustrates how promptrepo processes commands, manages reg
 
 ```mermaid
 graph TD
-    subgraph CLI Interface Layer
+    subgraph "CLI Interface Layer"
         main["cli/main.py"]
     end
 
-    subgraph Core Controller
+    subgraph "Core Controller"
         repo["core/repo.py (PromptRepo)"]
     end
 
-    subgraph Local Registry (Storage)
+    subgraph "Local Registry (Storage)"
         storage["core/storage.py (StorageEngine)"]
         db[".promptrepo/spaces/*.json"]
         traces[".promptrepo/traces.jsonl"]
     end
 
-    subgraph Utilities
+    subgraph "Utilities"
         template["utils/template.py (Template Engine)"]
         cost["utils/cost.py (Pricing Model)"]
         lock["core/repo.py (LockGuard)"]
     end
 
-    subgraph Execution Adapter Layer
+    subgraph "Execution Adapter Layer"
         provider["providers/ (OpenAI, Anthropic, Gemini, Ollama, Mock)"]
     end
 
