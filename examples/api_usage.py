@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """
-Examples of using promptvc programmatically as a Python library.
-This file demonstrates repository initialization, committing prompts with schema,
-variable rendering, running prompts with providers, locking versions, and diffing.
+# Examples of using promptrepo programmatically as a Python library.
+# This file demonstrates repository initialization, committing prompts with schema,
+# variable rendering, running prompts with providers, locking versions, and diffing.
 """
 
 import os
 import shutil
-from promptvc.core import PromptRepo
-from promptvc.providers.mock import MockProvider
-from promptvc.utils.template import render_template
-from promptvc.core.diff import compute_diff, format_diff
+from promptrepo.core import PromptRepo
+from promptrepo.providers.mock import MockProvider
+from promptrepo.utils.template import render_template
+from promptrepo.core import compute_diff, format_diff
 
 def main():
-    # 1. Initialize a temporary promptvc repository for demonstration
-    demo_dir = os.path.abspath("./.demo_promptvc")
+    # 1. Initialize a temporary promptrepo repository for demonstration
+    demo_dir = os.path.abspath("./.demo_promptrepo")
     if os.path.exists(demo_dir):
         shutil.rmtree(demo_dir)
 
     print("--- 1. Initializing Repository ---")
-    # Initialize repository. By default, StorageEngine looks for '.promptvc' in the current directory.
+    # Initialize repository. By default, StorageEngine looks for '.promptrepo' in the current directory.
     # We can inject a custom storage root by subclassing/overriding if needed, but for simplicity,
     # let's use the default repo class or point storage directly to our demo directory.
     repo = PromptRepo()
     # Override storage root path to not pollute actual workspace configuration during demo
-    repo.storage._root = repo.storage._root.parent / ".demo_promptvc"
+    repo.storage._root = repo.storage._root.parent / ".demo_promptrepo"
     repo.init_repo()
     print(f"Repository initialized at: {repo.storage._root}")
 
@@ -85,7 +85,7 @@ def main():
     # For testing, we use MockProvider. In production, you can use OpenAIProvider, etc.
     provider = MockProvider()
     
-    # Low-level execution directly through promptvc. This also logs the run record to the storage.
+    # Low-level execution directly through promptrepo. This also logs the run record to the storage.
     # Note: repo.run executes the raw prompt template. To execute a rendered prompt,
     # we can pass it directly to the provider.
     run_result = provider.run(rendered)

@@ -1,480 +1,97 @@
-# promptvc
+# 📦 promptrepo
 
-Prompt Version Control - A Git-Like CLI Tool and Execution Core for LLM Prompts.
+**Prompt Version Control — Production-grade Git for LLM prompts.**
 
----
-
-## 1. Problem Statement
-
-Prompts are load-bearing logical components in modern software architectures. They dictate data structures, govern agentic execution paths, and transform codebases. However, prompt engineering and integration workflows frequently lack the basic discipline applied to traditional source code.
-
-In modern development environments, prompts suffer from the following systemic issues:
-* Out-of-band management: Prompts are copy-pasted into Notion documents, shared over chat tools, or hardcoded directly in application source code.
-* Missing version history: Prompt text is edited in place on production databases or server parameters with no version lineage, no change documentation, and no rollback mechanism.
-* Silent regressions: Adjusting a prompt to fix an edge case on one input often degrades output quality across other inputs without triggering errors.
-* Lack of observability: Latency, token consumption, and API cost metrics are rarely logged or mapped directly to the version of the prompt that generated them.
-
-This lack of control introduces vulnerabilities when deploying LLM integrations to production. A single prompt modification can break backend parsing logic, escalate runtime API costs, or compromise model performance without developer visibility.
+Manage, test, version, and execute your LLM prompts with standard software engineering discipline. All stored locally, offline, and version-controlled.
 
 ---
 
-## 2. What This Tool Is (and Is NOT)
+## 🚀 Key Features
 
-* It IS a local, version-controlled prompt registry: Prompts are saved in a structured, local format (`.promptvc/spaces/*.json`) using sequential, immutable version identifiers.
-* It IS a declarative test and evaluation runner: Supports assertion verification (JSON validation, token counts, regex checks, semantic similarity) against evaluation datasets directly in the console.
-* It IS a multi-provider execution abstraction: Runs templates across local instances (Ollama) and cloud APIs (OpenAI, Anthropic, Gemini) using a unified invocation format.
-* It IS NOT a visual prompt playground: There are no web-based node diagrams, drag-and-drop elements, or third-party cloud hosting requirements.
-* It IS NOT a framework-level runtime wrapper: It does not force you to write application code inside specific chains, agent classes, or SDK models.
-
----
-
-## 3. Why This Tool Matters
-
-By treating prompts as immutable, versioned code assets, this tool establishes a reliable local iteration loop:
-* Reproducibility: Every execution log, evaluation result, and file change is mapped directly to a specific prompt space name, version ID, and SHA-256 hash.
-* Testability: Automated test suites verify prompt outputs against assertions before updates are deployed.
-* Control: Historical versions can be explicitly locked to protect stable production paths from unintended modifications.
-* Transparency: Integrated token modeling estimates exact API costs and response latency across providers, preventing production cost overruns.
+* **Git-like Version Control**: Track changes in prompt templates using auto-incrementing IDs (`v1`, `v2`, `v3`) and SHA-256 hashes. Lock stable versions for production safety.
+* **Declarative Unit Testing**: Write JSON assertion test suites using token bounds, regex, JSON schema validation, and semantic similarity (Jaccard & LLM-as-a-judge).
+* **Multi-Provider Execution**: Standardized python and CLI wrappers for cloud API models (OpenAI, Anthropic, Gemini) and offline/local models (Ollama).
+* **Stateful Interactive Shell**: A robust terminal REPL loop with persistent variable binding and cost/latency telemetry tracking.
+* **Codebase Refactoring**: Run LLM prompt-diff engines to modify and patch local directories or source files safely with backup-and-rollback guards.
+* **Zero Cloud Lock-in**: All version data and execution logs are stored as simple human-readable JSON files in your local `.promptrepo/` registry.
 
 ---
 
-## 4. Core Features
+## 💾 Installation
 
-### Immutable Versioning and Space Management
-Prompts are organized into logical partitions called "spaces" (e.g., `summarize`, `code_generation`). Each commit registers a new immutable version.
-* Auto-incrementing IDs (v1, v2, v3).
-* Version hashes computed over raw prompt text.
-* Author and message metadata logs.
-* Lock gates: Running `lock` marks a version as read-only, raising errors if a developer attempts to modify or commit over it.
+Install the package via `pip`:
 
-### Schema-Based Variable Injection
-Prompts support template parameters using `{{variable}}` brackets. A version can optionally declare a JSON validation schema defining:
-* Variable types (e.g., string, boolean).
-* Required vs. optional flags.
-* Default values (used automatically if no override is supplied).
-* Documentation descriptions for interactive prompts.
-
-### Declarative Unit Testing Engine
-The test module provides a local, CI-ready testing framework:
-* JSON-defined test cases specifying inputs, assertions, and checks.
-* Composite Scoring: Runs rules and model evaluations to aggregate a normalized case score from 0.0 to 1.0.
-* Rule-Based Assertions: `contains`, `not_contains`, `regex`, `json_valid`, `min_tokens`, `max_tokens`, and `golden`.
-* Jaccard semantic similarity: The `golden` assertion measures similarity of token word-sets between execution output and a stored golden file.
-* LLM-as-a-Judge: Validates free-form model assertions (e.g. style constraints, safety guidelines) using configurable evaluation prompts against LLMs.
-* Regression Delta & Gates: Compares suite performance against a base version, generating a comparative score delta table, and failing CI with threshold gates.
-* Automated updates: The `test golden` command runs the prompt version and overwrites or creates golden file records.
-
-### Multi-Step Orchestration Pipelines
-Execute multi-step prompt workflows sequentially using JSON declarations:
-* Downstream step templates can reference upstream step outputs using the `{{ steps.step_id.output }}` syntax.
-* Global pipeline variables are referenced using the `{{ input.variable_name }}` syntax.
-* Validates parameter inputs, prompt spaces, and execution paths before requesting provider resources.
-
-### Interactive Shell REPL
-A stateful interactive command loop for rapid prompt debugging:
-* Persistent variable binds: `var code="def add(a, b): return a + b"`.
-* Quick provider and model switching: `set provider anthropic` or `set model gpt-4o`.
-* Shell runtime metrics tracking: `cost` aggregates accumulated token usage, latency, and dollar costs across the current session.
-
-### Diff-Based File Editing
-Modify filesystem resources safely using LLM instructions:
-* Safe reader checks: Attempts UTF-8, UTF-8-sig, UTF-16, and Latin-1 encodings, preserving the original file encoding during modifications.
-* Unified diff validation: Parses model output as a strict unified diff, validates target contexts against original file lines, and handles space-stripped context lines.
-* Atomic Backups & Rollback: Automatically saves a `.bak` backup of target files before modifying them, and restores the backup if anything goes wrong.
-* Idempotency checking: Automatically compares the SHA-256 fingerprint of the target file to prevent duplicate modifications.
-* Approval gate: Applies modifications only after interactive validation, logging the change log entry.
-
-### Observability and Trace Logging
-Gain deep runtime insight with complete execution logging:
-* Transactional tracing: Automatically logs inputs, outputs, tokens, latencies, model configurations, scores, and errors to `.promptvc/traces.jsonl`.
-* CLI querying: Search, filter, and inspect traces interactively using `promptvc trace`.
-
-### Schema & Dataset Validation
-Enforce strict consistency across prompt definitions and evaluations:
-* Prompt validation: Runs `promptvc validate prompt` to verify template consistency, variable names, and schema defaults.
-* Dataset validation: Runs `promptvc validate dataset` to verify the structure, types, and schema compatibility of bulk evaluation files.
-
----
-
-## 5. CLI Reference
-
-### init
-Initialize a promptvc repository in the current workspace.
-* Syntax: `promptvc init`
-* Behavior: Creates the `.promptvc/` directory structure.
-* When to use: Set up a new local workspace.
-* Example:
-  ```bash
-  promptvc init
-  ```
-
-### status
-Provide a high-level overview of the current workspace.
-* Syntax: `promptvc status`
-* Behavior: Inspects the registry and displays active spaces, version counts, execution runs, and recent actions.
-* When to use: Check workspace state.
-* Example:
-  ```bash
-  promptvc status
-  ```
-
-### commit
-Commit a new version to a prompt space.
-* Syntax: `promptvc commit <name> [flags]`
-* Flags:
-  * `--prompt <string>`: Raw prompt text. If omitted, opens interactive multi-line terminal input.
-  * `--message <string>`: Commit message. If omitted, opens interactive terminal prompt.
-* Behavior: Resolves prompt and message, validates that the space exists, checks that the latest version is not locked, and serializes the new version.
-* When to use: Register a new iteration of a prompt template.
-* Example:
-  ```bash
-  promptvc commit translate --prompt "Translate this text to French: {{text}}" --message "v1 translation prompt"
-  ```
-
-### log
-Display execution commit history for a prompt space.
-* Syntax: `promptvc log <name>`
-* Behavior: Renders a structured history table containing version IDs, messages, token counts, lock status, and dates.
-* When to use: Audit how a prompt space has evolved over time.
-* Example:
-  ```bash
-  promptvc log translate
-  ```
-
-### get
-Display the raw prompt content of a specific version.
-* Syntax: `promptvc get <name> <version>`
-* Behavior: Prints the raw template string. Supports the `latest` version alias.
-* When to use: View prompt text without metadata formatting.
-* Example:
-  ```bash
-  promptvc get translate latest
-  ```
-
-### inspect
-Display detailed metadata and schema information for a version.
-* Syntax: `promptvc inspect <name> <version>`
-* Behavior: Parses version records and outputs raw prompt text, variables, validation schema fields, lock states, and example CLI commands. Supports the `latest` version alias.
-* When to use: Verify a prompt's required template arguments.
-* Example:
-  ```bash
-  promptvc inspect translate v1
-  ```
-
-### diff
-Compute the token, character, and text difference between two prompt versions.
-* Syntax: `promptvc diff <name> <v1> <v2> [flags]`
-* Flags:
-  * `--text`: Display unified diff lines (like `git diff`).
-  * `--stat`: Display comparison metrics table (characters, words, and tokens).
-* Behavior: Calculates delta metrics between target versions.
-* When to use: Analyze changes between versions.
-* Example:
-  ```bash
-  promptvc diff translate v1 v2 --text
-  ```
-
-### lock
-Lock a prompt version to prevent modification.
-* Syntax: `promptvc lock <name> <version>`
-* Behavior: Sets the `locked` property to `true` in the space record. Succeeding commits or evaluations targeting this version will block modifications. Supports the `latest` version alias.
-* When to use: Mark a version as a production release.
-* Example:
-  ```bash
-  promptvc lock translate v1
-  ```
-
-### list
-List all registered prompt spaces.
-* Syntax: `promptvc list`
-* Behavior: Returns a table listing all space names, their latest active version, and version counts.
-* When to use: Discover prompt spaces in the workspace.
-* Example:
-  ```bash
-  promptvc list
-  ```
-
-### run
-Execute a prompt version against a provider.
-* Syntax: `promptvc run <name> <version> [flags]`
-* Flags:
-  * `--provider <string>`: Target provider (openai, anthropic, gemini, ollama, mock).
-  * `--model <string>`: Provider model override.
-  * `--timeout <int>`: Timeout limit in seconds.
-  * `--max-tokens <int>`: Output tokens limit.
-  * `--stream`: Stream tokens to stdout.
-  * `--var <key=value>`: Template variable binding. Repeatable.
-  * `--dry-run`: Renders the template to stdout without executing it.
-  * `--non-interactive`: Disable interactive terminal inputs.
-* Behavior: Resolves template variables, renders the template, calls the provider, and prints output alongside token usage and latency. Supports the `latest` version alias.
-* When to use: Test prompt templates with specific inputs.
-* Example:
-  ```bash
-  promptvc run translate v1 --var text="Hello world" --provider openai
-  ```
-
-### eval
-Evaluate a prompt version against a dataset.
-* Syntax: `promptvc eval <name> <version> [flags]`
-* Flags:
-  * `--dataset <path>`: Required. Path to JSON dataset file.
-  * `--provider`, `--model`, `--timeout`, `--max-tokens`, `--stream`, `--non-interactive`.
-* Behavior: Executes the prompt template against each item in the dataset. Saves results to the space database. Supports the `latest` version alias.
-* When to use: Verify prompt output quality across batch datasets.
-* Example:
-  ```bash
-  promptvc eval translate v1 --dataset data.json --provider ollama --model llama3
-  ```
-
-### compare
-Evaluate two prompt versions on a dataset and display outputs side-by-side.
-* Syntax: `promptvc compare <name> <v1> <v2> [flags]`
-* Flags:
-  * `--dataset <path>`: Required. Dataset file path.
-  * `--provider`, `--model`, `--timeout`, `--max-tokens`, `--stream`.
-* Behavior: Runs evaluations for both versions and prints side-by-side outputs.
-* When to use: Run comparative evaluations before releasing prompt updates.
-* Example:
-  ```bash
-  promptvc compare translate v1 v2 --dataset data.json
-  ```
-
-### apply
-Apply a prompt to a target file or directory using LLM-generated diffs.
-* Syntax: `promptvc apply <name> <version> [flags]`
-* Flags:
-  * `--file <path>`: Target file path to modify.
-  * `--dir <path>`: Target directory path to modify.
-  * `--glob <pattern>`: Filter pattern when using `--dir` (default: `*`).
-  * `--provider`, `--model`, `--timeout`, `--max-tokens`, `--stream`, `--var`, `--dry-run`, `--non-interactive`.
-* Behavior: Reads target files, requests unified diffs from the provider, shows diff lines, and applies updates upon user approval. Logs change metadata. Supports the `latest` version alias.
-* When to use: Run automated refactoring prompts on codebase files.
-* Example:
-  ```bash
-  promptvc apply refactor v1 --file src/main.py --provider openai
-  ```
-
-### changes
-Display the file change history for a prompt space.
-* Syntax: `promptvc changes <name>`
-* Behavior: Displays a table detailing execution timestamps, prompt versions used, and modified file paths.
-* When to use: Audit which code files were modified by which prompts.
-* Example:
-  ```bash
-  promptvc changes refactor
-  ```
-
-### config
-View or modify configuration parameters.
-* Syntax: `promptvc config <action> [key] [value]`
-* Actions:
-  * `set`: Bind value to config key.
-  * `get`: Print value of config key.
-  * `list`: Output entire config JSON object.
-* Behavior: Reads and modifies configuration settings at `.promptvc/config.json`.
-* When to use: Set default models, timeouts, or API keys.
-* Example:
-  ```bash
-  promptvc config set provider openai
-  promptvc config set models.openai gpt-4o-mini
-  ```
-
-### test
-Manage and execute automated assertion test suites.
-* Syntax: `promptvc test <subcommand> [flags]`
-* Subcommands:
-  * `run <name> <version> --suite <path>`: Run assertion test suite.
-    * `--threshold <float>`: Optional. Minimum average score (0.0 to 1.0) to pass (CI exit-code gate).
-    * `--compare <version>`: Optional. Version ID (e.g. v1) to check for regressions. Displays delta metrics table.
-    * `--deterministic`: Optional. Run only rules and skip LLM-as-a-judge assertions for speed/cost.
-  * `golden <name> <version> --suite <path>`: Run cases and update stored golden files with the outputs.
-  * `list [--dir <path>]`: List all test suite JSON files recursively (default path is `.`).
-* When to use: Validate prompt changes inside CI pipelines or local verification environments.
-* Example:
-  ```bash
-  promptvc test run summarize v2 --suite tests/suite.json --compare v1 --threshold 0.8
-  ```
-
-### validate
-Validate dataset files or committed prompt version schemas.
-* Syntax: `promptvc validate <subcommand>`
-* Subcommands:
-  * `dataset <file>`: Checks if a dataset file is well-formed JSON, contains `input` structures, and matches expected schemas.
-  * `prompt <name> <version>`: Checks consistency of schema defaults, variable naming, types, and properties.
-* When to use: Avoid executing corrupted runs by preemptively validating templates and test parameters.
-* Example:
-  ```bash
-  promptvc validate dataset test_inputs.json
-  promptvc validate prompt summarize latest
-  ```
-
-### trace
-Query and inspect execution runs log.
-* Syntax: `promptvc trace <name> [version] [flags]`
-* Flags:
-  * `--last <int>`: Retrieve the last N execution traces (default: 20).
-  * `--json`: Print raw trace logs as a JSON list.
-* Behavior: Retrieves execution logs from `.promptvc/traces.jsonl`, formats them as a clean summary table showing token count, latency, scores, and errors, and displays details for the latest run.
-* When to use: Audit runtime execution performance, debug outputs, or examine recent scoring history.
-* Example:
-  ```bash
-  promptvc trace summarize --last 10
-  ```
-
-### pipe
-Execute multi-step prompt workflows sequentially.
-* Syntax: `promptvc pipe <subcommand>`
-* Subcommands:
-  * `run <pipeline_file> [--var key=value] [--provider name]`: Runs the specified multi-step pipeline.
-  * `validate <pipeline_file>`: Verifies pipeline syntax and reference bindings without executing.
-* When to use: Compose chained tasks where downstream steps consume upstream step outputs.
-* Example:
-  ```bash
-  promptvc pipe run translate_and_summarize.json --var text="Hello world"
-  ```
-
-### shell
-Launch the stateful interactive REPL.
-* Syntax: `promptvc shell`
-* Behavior: Opens a command-line prompt loop allowing variable bindings, quick model/provider switching, and real-time cost and latency tracking.
-* When to use: Iterative debugging and prompt hacking.
-* Example:
-  ```bash
-  promptvc shell
-  ```
-
-### Global Flag Behaviors
-
-* `--version`: Print program version and exit.
-* `--json`: Output command results in machine-readable JSON format where applicable.
-* `--provider`: Invocation provider override. Resolution order: `--provider` flag -> value in `config.json` -> `mock`.
-* `--model`: Invocation model override. Resolution order: `--model` flag -> configured default in `config.json` -> provider-native default.
-* `--var`: Declares template inputs. Parsed as `key=value` strings.
-* `--non-interactive`: Disables interactive console fallbacks. If required parameters are missing, exits with status 1.
-* `--timeout`: Invocations terminate and raise errors if they exceed this value in seconds.
-* `--max-tokens`: Instructs the provider to clamp model response length to this token count limit.
-* `--stream`: Intercepts API response frames and writes them directly to stdout.
-
----
-
-## 6. End-to-End Developer Workflows
-
-### Scenario A: Prompt Creation and Iteration
-
-Initialize the project space and register a summarization template:
 ```bash
-$ promptvc init
-$ promptvc commit summarize --prompt "Summarize this: {{text}}" --message "v1 basic summary"
+pip install promptrepo
 ```
 
-Verify version status:
+To install with specific provider dependencies:
+
 ```bash
-$ promptvc log summarize
-```
+# Install with all cloud providers
+pip install "promptrepo[all]"
 
-Test the template with a sample input:
-```bash
-$ promptvc run summarize v1 --var text="Structured version control improves pipeline reliability." --provider openai
-```
-
-Refine the template by committing a second iteration:
-```bash
-$ promptvc commit summarize --prompt "Summarize this in five words: {{text}}" --message "v2 shorter constraint"
-```
-
-### Scenario B: Batch Evaluation and Comparison
-
-Generate a local evaluation dataset named `inputs.json`:
-```json
-[
-  {"input": "Machine learning architectures benefit from clear telemetry integration."},
-  {"input": "Static analysis parsing prevents runtime execution exceptions."}
-]
-```
-
-Run a comparison run between v1 and v2:
-```bash
-$ promptvc compare summarize v1 v2 --dataset inputs.json --provider openai
-```
-
-Review outputs side-by-side, then lock the stable iteration:
-```bash
-$ promptvc lock summarize v2
-```
-
-### Scenario C: Safe Codebase Modification
-
-Create a code refactoring prompt space:
-```bash
-$ promptvc commit fix_imports --prompt "Refactor import blocks to keep standard libraries sorted: {{code}}" --message "v1 import sorter"
-```
-
-Apply the prompt to a target python file:
-```bash
-$ promptvc apply fix_imports v1 --file src/main.py --provider openai
-```
-
-Review the diff output in the terminal console. Select `y` to apply the patch. Check space changes logs:
-```bash
-$ promptvc changes fix_imports
-```
-
-### Scenario D: CI/CD Pipeline Assertion Tests
-
-Define a test suite in `tests/summarize_suite.json`:
-```json
-[
-  {
-    "id": "ml_summary",
-    "input": {
-      "text": "Telemetry integrations support pipeline diagnostics."
-    },
-    "assertions": [
-      { "type": "contains", "value": "telemetry" },
-      { "type": "max_tokens", "value": 50 }
-    ]
-  }
-]
-```
-
-Run assertions inside automated build pipelines using `--non-interactive`:
-```bash
-$ promptvc test run summarize v2 --suite tests/summarize_suite.json --provider openai --non-interactive
+# Or select individual providers
+pip install "promptrepo[openai,anthropic,gemini]"
 ```
 
 ---
 
-## 7. Programmatic API (Python SDK)
+## ⚡ Quick Start
 
-While `promptvc` provides a comprehensive CLI, the underlying execution engine can be imported directly into Python applications. The library exports a high-level developer SDK at the root namespace, as well as a lower-level core interface (`PromptRepo`) for advanced repository actions.
+Get up and running in under a minute with 4 core commands:
 
-### 7.1 Quick Setup & SDK Imports
+```bash
+# 1. Initialize a new local registry
+promptrepo init
 
-First, ensure that your repository is initialized (typically via `promptvc init` or programmatically with `PromptRepo().init_repo()`). Then, import the SDK:
+# 2. Commit your first prompt template space
+promptrepo commit summarize --prompt "Summarize this: {{text}}" --message "v1 base template"
 
+# 3. Verify history and version log
+promptrepo log summarize
+
+# 4. Run execution with variable bindings
+promptrepo run summarize latest --var text="Version control improves pipeline stability." --provider mock
+```
+
+---
+
+## 💻 CLI Command Reference
+
+Below is a brief summary of core command patterns. Run `promptrepo --help` or `promptrepo <command> --help` for full parameter options.
+
+| Command | Usage | Description |
+|---|---|---|
+| `init` | `promptrepo init` | Initialize a new local `.promptrepo` registry. |
+| `commit` | `promptrepo commit <space> --prompt <text>` | Save a new immutable version with author log details. |
+| `log` | `promptrepo log <space>` | Renders a version history log with token counts and lock status. |
+| `lock` | `promptrepo lock <space> <version>` | Mark a version as read-only to prevent deletion or overwriting. |
+| `run` | `promptrepo run <space> <version> --var k=v` | Substitute variables and execute against an LLM provider. |
+| `eval` | `promptrepo eval <space> <version> --dataset <path>` | Run a prompt space version in batch against an input dataset. |
+| `compare` | `promptrepo compare <space> <v1> <v2> --dataset <path>` | Run side-by-side comparative outputs on the same dataset. |
+| `test run`| `promptrepo test run <space> <version> --suite <path>` | Execute automated assertions & output checks. |
+| `apply` | `promptrepo apply <space> <version> --file <path>` | Refactor codebases using prompt-generated unified diffs. |
+| `trace` | `promptrepo trace <space> [version] [--last N]` | Audit performance logs, costs, and latencies from registry. |
+| `shell` | `promptrepo shell` | Open the stateful debugging REPL loop with cost tracking. |
+
+---
+
+## 🐍 Python SDK Integration
+
+Avoid hardcoding prompt strings directly in your application code. Keep prompts isolated by using `promptrepo` to resolve, render, and execute versioned prompt assets.
+
+### 1. Programmatic Execution (`run`)
 ```python
-import promptvc
-```
+import promptrepo
 
-All primary execution functions, context wrappers, and result objects are exported directly from the top-level package.
-
----
-
-### 7.2 Single-Shot Execution (`run`)
-
-Use `promptvc.run()` to quickly substitute variables and execute a specific prompt version against a provider:
-
-```python
-import promptvc
-
-# Run prompt version with OpenAI
-result = promptvc.run(
+result = promptrepo.run(
     name="translator",
-    version="v1",          # Can also use "latest"
-    provider="openai",     # openai, anthropic, gemini, ollama, mock
-    model="gpt-4o-mini",   # Optional model override
-    temperature=0.3,       # Optional sampling temperature
-    # Template variables are passed as keyword arguments:
+    version="v1",
+    provider="openai",
+    model="gpt-4o-mini",
+    temperature=0.3,
+    # Variable bindings as keyword arguments:
     language="Spanish",
     text="Hello, world!"
 )
@@ -482,69 +99,45 @@ result = promptvc.run(
 if result.ok:
     print(f"Output: {result.output}")
     print(f"Total Tokens: {result.tokens}")
-    print(f"Latency: {result.latency_ms} ms")
-    if result.cost:
-        print(f"Cost USD: {result.cost_usd}")
-else:
-    print(f"Execution failed: {result.error}")
+    print(f"Latency: {result.latency_ms}ms")
+    print(f"Cost: ${result.cost_usd:.5f}")
 ```
 
----
-
-### 7.3 Wrapper Decorator (`@prompt`)
-
-Power any Python function with a versioned prompt space using the `@promptvc.prompt` decorator. The function's keyword arguments will map directly to template variables, and the decorated function returns a `RunResult` object:
-
+### 2. Wrap Functions with Decorator (`@prompt`)
 ```python
-import promptvc
+import promptrepo
 
-@promptvc.prompt("summarizer", version="latest", provider="anthropic", model="claude-3-5-sonnet")
-def summarize(text: str) -> promptvc.RunResult:
-    """This function is powered by promptvc 'summarizer' version 'latest'"""
+@promptrepo.prompt("summarizer", version="latest", provider="anthropic", model="claude-3-5-sonnet")
+def summarize(text: str) -> promptrepo.RunResult:
+    """This function is backed by promptrepo's 'summarizer' prompt space."""
     pass
 
-# Invoke the function
-result = summarize(text="Prompt Version Control enforces immutability and version safety...")
-print(f"Summary: {result.output}")
-print(f"Model Used: {result.model}")
+# Returns a detailed RunResult containing outputs and usage telemetry
+res = summarize(text="Prompt Version Control enforces immutability and version safety...")
+print(f"Summary: {res.output}")
 ```
 
----
-
-### 7.4 Context Manager (`run_context`)
-
-Use the `run_context` context manager when you want granular execution control, automatic trace logging, or want to compute aggregate costs/latencies over dynamic sequences:
-
+### 3. Granular Telemetry Tracking (`run_context`)
 ```python
-import promptvc
+import promptrepo
 
-with promptvc.run_context("classifier", "v2", provider="gemini") as ctx:
-    # Run a classification task
-    result = ctx.run(text="The pizza was delicious!")
+with promptrepo.run_context("classifier", "v2", provider="gemini") as ctx:
+    result = ctx.run(text="The model performance was outstanding!")
     
-    print(f"Classified Output: {result.output}")
-    print(f"Context Latency: {ctx.latency_ms} ms")
-    if ctx.cost:
-        print(f"Accumulated Cost: {promptvc.format_cost(ctx.cost.total_cost_usd)}")
+    print(f"Prediction: {result.output}")
+    print(f"Accumulated Session Cost: {promptrepo.format_cost(ctx.cost.total_cost_usd)}")
 ```
 
----
-
-### 7.5 Batch Execution (`batch_run`)
-
-To evaluate a prompt template across multiple input dictionaries in parallel, use `promptvc.batch_run()`. It executes tasks concurrently using a local thread pool:
-
+### 4. Parallel Batch Evaluation (`batch_run`)
 ```python
-import promptvc
+import promptrepo
 
 inputs = [
-    {"text": "First article contents..."},
-    {"text": "Second article contents..."},
-    {"text": "Third article contents..."}
+    {"text": "First article context..."},
+    {"text": "Second article context..."}
 ]
 
-# Run all inputs in parallel using up to 4 worker threads
-batch_result = promptvc.batch_run(
+batch_result = promptrepo.batch_run(
     name="summarizer",
     version="v1",
     inputs=inputs,
@@ -552,299 +145,23 @@ batch_result = promptvc.batch_run(
     max_workers=4
 )
 
-print(f"Success Rate: {batch_result.success_rate * 100}%")
-print(f"Total Combined Tokens: {batch_result.total_tokens}")
-if batch_result.total_cost_usd is not None:
-    print(f"Total Batch Cost: {promptvc.format_cost(batch_result.total_cost_usd)}")
-
-for idx, run_res in enumerate(batch_result.results):
-    print(f"\n[Run {idx+1}] Output: {run_res.output}")
+print(f"Success rate: {batch_result.success_rate * 100}%")
+print(f"Total Combined Cost: {promptrepo.format_cost(batch_result.total_cost_usd)}")
 ```
 
 ---
 
-### 7.6 SDK Result Interfaces
+## 🛠️ Advanced DevOps & CI/CD Pipelines
 
-#### `RunResult`
-Returned by `run()`, `@prompt`, and individual items in `BatchResult`.
-* `.ok` (`bool`): True if execution succeeded.
-* `.output` (`str`): The raw text response from the model.
-* `.tokens` (`int` | `None`): Sum of input and output tokens.
-* `.input_tokens` (`int` | `None`): Tokens in prompt template.
-* `.output_tokens` (`int` | `None`): Tokens in completion response.
-* `.latency_ms` (`float`): Execution duration in milliseconds.
-* `.cost` (`CostBreakdown` | `None`): Detailed pricing model breakdown.
-* `.cost_usd` (`float` | `None`): Convenience getter for total USD cost.
-* `.model` (`str`): Model identifier used by the provider.
-* `.trace_id` (`str`): Unique trace GUID generated for telemetry lookup.
-* `.error` (`str` | `None`): Error traceback string if execution failed.
+### Pre-commit Git Hook Validation
+Prevent regressions by validating prompt definitions before code gets pushed. Place this script in `.git/hooks/pre-commit` to gate commits on test thresholds:
 
-#### `BatchResult`
-Returned by `batch_run()`.
-* `.results` (`List[RunResult]`): List of execution results (matches input order).
-* `.total_tokens` (`int`): Sum of all tokens consumed across the batch.
-* `.total_cost_usd` (`float` | `None`): Sum of all costs across the batch.
-* `.total_latency_ms` (`float`): Total wall-clock time elapsed for the batch sequence.
-* `.success_rate` (`float`): Percentage (0.0 to 1.0) of successful runs.
-* `.success_count` (`int`): Number of successful runs.
-* `.error_count` (`int`): Number of failed runs.
-
----
-
-### 7.7 Low-level Core API (`PromptRepo`)
-
-If you need programmatic control over repository commands (such as initializing registries, committing prompt modifications, managing version locks, or computing prompt diffs):
-
-```python
-from promptvc.core import PromptRepo
-from promptvc.utils.template import render_template
-from promptvc.core.diff import compute_diff, format_diff
-
-# 1. Load the Repository
-# By default, manages the local `.promptvc` directory in the current working directory.
-repo = PromptRepo()
-
-# Initialize if not already initialized
-if not repo.storage.is_initialized:
-    repo.init_repo()
-
-# 2. Register & Commit a Prompt Version programmatically
-meta = repo.commit(
-    name="translator",
-    prompt="Translate this text to {{language}}: {{text}}",
-    message="v1 initial translation prompt",
-    schema={
-        "variables": {
-            "language": {"type": "string", "required": True},
-            "text": {"type": "string", "required": True}
-        }
-    }
-)
-
-# 3. Retrieve Prompt Template and Metadata
-# Returns the raw prompt string
-prompt_template = repo.get("translator", "v1") 
-# Returns dictionary containing version author, hash, lock status, and tokens
-version_meta = repo.get_version_meta("translator", "v1") 
-
-# 4. Render template variables manually
-rendered = render_template(prompt_template, {"language": "French", "text": "Hello"})
-print(rendered) # "Translate this text to French: Hello"
-
-# 5. Lock Stable Versions
-# Prevents further modifications or commits to "v1"
-repo.lock("translator", "v1")
-
-# 6. Compute Prompt Differences
-# Get token metrics difference between two versions
-token_diff = repo.token_diff("translator", "v1", "v2")
-
-# Compute line-by-line unified diffs
-diff_lines = compute_diff("Hello world", "Hello beautiful world")
-print(format_diff(diff_lines))
-```
-
-See [examples/api_usage.py](file:///d:/prompt-version-control/examples/api_usage.py) for a complete runnable demonstration.
-
----
-
-## 8. Architecture Overview
-
-### Component Diagram
-
-```
-+--------------------------------------------------------------+
-|                     CLI Interface Layer                      |
-|                         (main.py)                            |
-+--------------------------------------------------------------+
-                               |
-                               | Dispatches Commands
-                               v
-+--------------------------------------------------------------+
-|                     Core Logic Controller                    |
-|                         (repo.py)                            |
-+--------------------------------------------------------------+
-       |                       |                        |
-       | Locks Mutations       | Resolves Templates     | Serializes State
-       v                       v                        v
-+--------------+        +--------------+        +--------------+
-|  Lock Guard  |        | Template Eng |        | Storage Eng  |
-|  (lock.py)   |        | (template.py)|        | (storage.py) |
-+--------------+        +--------------+        +--------------+
-                                                        |
-                                                        | Write Path
-                                                        v
-                                                +--------------+
-                                                | Local Disk   |
-                                                | .promptvc/   |
-                                                +--------------+
-```
-
-### Subsystems
-
-1. **CLI Layer (`cli/main.py`):** Translates command strings to handler calls, configures Windows UTF-8 stdout, and coordinates interactive inputs when parameters are missing.
-2. **Core Logic Controller (`core/repo.py`):** Coordinates access to version registry, validation schemas, evaluation metrics, and runtime hooks.
-3. **Lock Guard (`core/lock.py`):** Enforces mutability rules. Blocks write requests targeting locked records.
-4. **Storage Engine (`core/storage.py`):** Manages local space file serialization. Implements transactional JSON writing to protect files from network or system interruptions.
-5. **Template System (`utils/template.py`):** Isolates template parameters, validates arguments, formats defaults, and returns clean prompt buffers.
-6. **Provider Layer (`providers/`):** Implements vendor connections. Normalizes requests and returns standardized metadata envelopes.
-
----
-
-## 9. Execution Model
-
-### Run vs. Eval vs. Compare
-
-The execution engine processes invocations through three distinct runtime pathways:
-
-* **run:** Executes a single template on one input set. Parameters are resolved from CLI overrides (`--var`), validation schema defaults, or interactive prompts. Results are persisted to the database runs array.
-* **eval:** Batches executions against a dataset array. Every array item must expose an `input` property. Evaluated outcomes, latencies, and token logs are persisted in the evaluations database table.
-* **compare:** Compares version metrics side-by-side on a shared dataset. It evaluates v1 and v2 on identical inputs at runtime. Comparison metrics are not stored.
-
-### Telemetry Mapping
-
-The provider layer extracts token telemetry (prompt tokens, response tokens, and total tokens) from API response packages. Cost estimates are determined using the model's cost rate coefficients located in `utils/cost.py`.
-
----
-
-## 10. Developer Experience
-
-### Reproducibility
-Every prompt commit includes a unique SHA-256 hash. Because files are versioned locally in a declarative format, developers can replicate model inputs at any point by pulling historical commits.
-
-### Traceability
-The `apply` command logs changes inside the space database configuration file. Every filesystem modification is mapped directly to the version of the prompt that suggested the patch.
-
-### Local Mock Debugging
-The `mock` provider returns reversed prompt buffers. This enables developers to test template layouts, pipeline flows, and test assertions locally without incurring model costs or API latency.
-
----
-
-## 11. Comparison with Existing Tools
-
-| Metric | promptvc | LangSmith / W&B | OpenAI Evals | Basic Scripting |
-|---|---|---|---|---|
-| **Storage Locality** | Local filesystem (`.promptvc/`) | Cloud-hosted dashboard | Local / Cloud datasets | None / In-code strings |
-| **Telemetry Profile** | Latency and Cost checks | Trace trees and logs | Evaluation frameworks | Manual tracking |
-| **Code Modification** | Diff-based patching | None | None | None |
-| **Dependencies** | Standard Library only | External packages | Python framework core | Custom scripts |
-| **CI Integration** | CLI `--non-interactive` | Cloud webhooks | Python command files | Custom setups |
-
----
-
-## 12. Use Cases
-
-### Automated Pre-Commit Assertions
-Run prompt assertion suites locally on every git commit. If output Jaccard similarity drifts past defined thresholds, block commits to enforce prompt stability.
-
-### Air-Gapped LLM Integrations
-Integrate prompts locally with offline databases using `Ollama` and `promptvc` in security-restricted environments.
-
-### Programmatic Code Refactoring
-Apply prompt patches to multi-file directory structures in batches to clean up deprecated APIs, sort imports, or apply style rules.
-
----
-
-## 13. Stability and Reliability
-
-The codebase incorporates several checks to ensure reliability in production environments:
-* **Transactional Serialization:** Database writes write first to a temporary file before renaming it to replace the target. This ensures that space registries are not corrupted if the process crashes mid-write.
-* **Encoding Auto-Detection:** Modifying codebase files via `apply` uses layered encoding checks to prevent silent character corruption in non-ASCII codebases.
-* **Stream Reconfiguration:** At module startup, `console.py` detects Windows shells and configures stdout/stderr streams to UTF-8 to prevent encoder faults when printing Unicode elements.
-* **Validation Gating:** Command handlers validate file path parameters and system configurations before calling provider APIs, preventing unnecessary token expenditure on bad configurations.
-* **Provider Lazy Registration:** Postpones loading provider libraries until they are executed, preventing crash sequences on machines missing dependencies for providers they do not use.
-* **Backup and Rollback Safety:** Automatically writes `.bak` backups of codebase files during `apply` actions, safely rolling back changes if a diff fails to apply cleanly.
-* **Idempotency Verification:** Validates the target file using SHA-256 fingerprints before modifications to guarantee that a prompt change is not double-applied.
-* **Self-Healing Connections:** Combines backoff-with-jitter retry logic for model execution calls to gracefully handle rate-limit (HTTP 429) errors and temporary connection drops.
-
----
-
-## 14. Installation and Quick Start
-
-### Installation
-Clone the repository and perform an editable installation using pip:
-```bash
-git clone https://github.com/uayushdubey/prompt-version-control.git
-cd prompt-version-control
-pip install -e .
-```
-
-Verify system setup:
-```bash
-$ promptvc status
-```
-
-### Quick Start Configuration
-Bind default model settings:
-```bash
-$ promptvc config set provider openai
-$ promptvc config set api_keys.openai "your-api-key"
-$ promptvc config set models.openai "gpt-4o-mini"
-```
-
----
-
-## 15. Workflow Integration & DevOps Guides
-
-Integrating `promptvc` into your development lifecycle ensures that prompt adjustments are treated with the same validation rigor as traditional codebase changes.
-
-### 15.1 Day-to-Day Iteration Cycle
-For active development, the standard workflow cycle proceeds as follows:
-
-```mermaid
-graph TD
-    A["1. init / check status"] --> B["2. commit / edit template"]
-    B --> C["3. run / quick test"]
-    C --> D["4. test run / verify assertions"]
-    D --> E["5. lock / production release"]
-```
-
-1. **Initialize / Check Status**:
-   Ensure you have a configured workspace.
-   ```bash
-   promptvc init
-   promptvc status
-   ```
-2. **Draft & Commit**:
-   Commit your template with a description and optional variable schemas.
-   ```bash
-   promptvc commit sentiment_analyzer --prompt "Classify the sentiment of: {{text}}" --message "v1 base sentiment prompt"
-   ```
-3. **Execute & Debug**:
-   Run the prompt locally using the configured provider to verify outputs.
-   ```bash
-   promptvc run sentiment_analyzer latest --var text="This tool works beautifully!" --stream
-   ```
-4. **Define & Execute Test Suite**:
-   Run test suites to prevent regression or silent performance drift.
-   ```bash
-   promptvc test run sentiment_analyzer latest --suite tests/sentiment_suite.json
-   ```
-5. **Lock Version**:
-   Mark the tested version as read-only once verified, making it ready for production integration.
-   ```bash
-   promptvc lock sentiment_analyzer latest
-   ```
-
----
-
-### 15.2 Local Git Hooks (Pre-commit Validation)
-You can prevent developers from committing broken prompts or regressions to the codebase by adding verification checks in git hooks.
-
-Create or edit `.git/hooks/pre-commit`:
 ```bash
 #!/bin/sh
-echo "=== Running promptvc pre-commit hooks ==="
+echo "=== Running promptrepo CI Assertion Checks ==="
 
-# 1. Validate prompt schemas
-promptvc validate prompt sentiment_analyzer latest
-if [ $? -ne 0 ]; then
-  echo "❌ Prompt validation failed!"
-  exit 1
-fi
-
-# 2. Run assertion suites (Fail commit if average score falls below threshold)
-promptvc test run sentiment_analyzer latest --suite tests/sentiment_suite.json --non-interactive --threshold 0.85
+# Fail the commit if test scores fall below the 85% threshold
+promptrepo test run sentiment_analyzer latest --suite tests/sentiment_suite.json --non-interactive --threshold 0.85
 if [ $? -ne 0 ]; then
   echo "❌ Regression detected or assertions failed! Aborting commit."
   exit 1
@@ -853,114 +170,30 @@ fi
 echo "✅ All prompt assertions passed."
 exit 0
 ```
-Make the hook executable:
-```bash
-chmod +x .git/hooks/pre-commit
-```
 
----
-
-### 15.3 Continuous Integration (GitHub Actions)
-You can integrate `promptvc` into your CI/CD pipeline to automatically execute assertion suites on every pull request.
-
-Create `.github/workflows/promptvc-verify.yml`:
-```yaml
-name: Verify Prompts
-
-on:
-  push:
-    branches: [ main, dev ]
-  pull_request:
-    branches: [ main ]
-
-jobs:
-  verify:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Codebase
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install promptvc
-        run: |
-          pip install .
-
-      - name: Configure Defaults & Secrets
-        run: |
-          promptvc config set provider openai
-          promptvc config set api_keys.openai "${{ secrets.OPENAI_API_KEY }}"
-          promptvc config set models.openai "gpt-4o-mini"
-
-      - name: Run Test Assertions
-        run: |
-          # Fails pipeline execution (exit code 1) if criteria are not met
-          promptvc test run sentiment_analyzer latest --suite tests/sentiment_suite.json --non-interactive --threshold 0.80
-```
-
----
-
-### 15.4 Web Application Runtime Integration (FastAPI Example)
-Avoid hardcoding prompts in python files. Keep your application clean and isolated by importing `promptvc` programmatically to resolve locked templates and run models dynamically.
+### Programmatic API (`PromptRepo`)
+For lower-level access to the repository storage engine, use `PromptRepo` directly:
 
 ```python
-import os
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from promptvc.core import PromptRepo
-from promptvc.providers import get_provider
-from promptvc.utils.template import render_template
-from promptvc.config import get_config_value
+from promptrepo.core import PromptRepo
 
-app = FastAPI()
-
-# 1. Instantiate the repository (looks for .promptvc in current directory)
 repo = PromptRepo()
 
-class AnalysisRequest(BaseModel):
-    text: str
+# Retrieve raw template string
+raw_template = repo.get("translator", "v1")
 
-@app.post("/analyze-sentiment")
-async def analyze_sentiment(req: AnalysisRequest):
-    try:
-        # 2. Retrieve the locked production prompt template (e.g. pinned to v1)
-        prompt_template = repo.get("sentiment_analyzer", "v1")
-        
-        # 3. Inject application variables
-        rendered = render_template(prompt_template, {
-            "text": req.text
-        })
-        
-        # 4. Resolve the configured provider and execute
-        provider_name = get_config_value("provider", "openai")
-        provider = get_provider(provider_name)
-        result = provider.run(rendered)
-        
-        # 5. Log execution trace to promptvc registry
-        run_record = {
-            "version": "v1",
-            "output": result["output"],
-            "tokens": result["tokens"],
-            "timestamp": repo._utc_now_iso()
-        }
-        repo.storage.append_run("sentiment_analyzer", run_record)
-        
-        return {
-            "sentiment": result["output"].strip(),
-            "tokens_consumed": result["tokens"],
-            "timestamp": run_record["timestamp"]
-        }
-        
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+# Lock version to make it read-only
+repo.lock("translator", "v1")
+
+# Compare line-by-line unified diffs
+diff_lines = repo.token_diff("translator", "v1", "v2")
 ```
 
 ---
 
-## 16. Roadmap
+## 🔒 Reliability & Production Architecture
 
-* **Remote Registry Sync:** Implement commands to push and pull prompt spaces to cloud systems (PostgreSQL, S3) to support team environments.
-* **Scoring Dashboard:** Build local static site report generation detailing cost trends, latency performance, and test history graphs.
+* **Transactional Database Writes**: Registry mutations first write to `.tmp` files before renaming to replace target configuration files, preventing corruption during system crashes.
+* **Encoding Tolerant Reads**: Code modification engine layers multiple string decoding attempts (UTF-8, UTF-8-sig, Latin-1, UTF-16) to read workspace resources safely.
+* **Lazy Module Registration**: Postpones provider dependency imports (like `google-generativeai` or `openai`) until execution time, allowing promptrepo to run lightweight CLI commands without requiring missing packages.
+* **Backup and Rollback Safety**: Automatically creates a `.bak` backup file before applying code changes, restoring original states if LLM diff generation fails context checks.

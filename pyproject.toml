@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "promptvc"
+name = "promptrepo"
 version = "0.2.0"
 description = "Prompt Version Control — production-grade git for LLM prompts"
 readme = "README.md"
@@ -30,9 +30,10 @@ all = [
 ]
 
 [project.scripts]
-promptvc = "promptvc.cli.main:main"
+promptrepo = "promptrepo.cli.main:main"
+promptvc = "promptrepo.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["promptvc*"]
+include = ["promptrepo*"]
 
