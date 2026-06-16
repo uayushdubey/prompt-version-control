@@ -444,28 +444,171 @@ $ promptvc test run summarize v2 --suite tests/summarize_suite.json --provider o
 
 ---
 
-## 7. Programmatic API (Python Usage)
+## 7. Programmatic API (Python SDK)
 
-While `promptvc` provides a comprehensive CLI, the underlying execution engine can be imported directly into Python applications. This allows you to programmatically manage prompt repositories, render templates, integrate mock or custom API providers, track metrics, and run unit tests.
+While `promptvc` provides a comprehensive CLI, the underlying execution engine can be imported directly into Python applications. The library exports a high-level developer SDK at the root namespace, as well as a lower-level core interface (`PromptRepo`) for advanced repository actions.
 
-### Initializing and Loading the Repository
+### 7.1 Quick Setup & SDK Imports
 
-To programmatically interact with a promptvc repository:
+First, ensure that your repository is initialized (typically via `promptvc init` or programmatically with `PromptRepo().init_repo()`). Then, import the SDK:
+
+```python
+import promptvc
+```
+
+All primary execution functions, context wrappers, and result objects are exported directly from the top-level package.
+
+---
+
+### 7.2 Single-Shot Execution (`run`)
+
+Use `promptvc.run()` to quickly substitute variables and execute a specific prompt version against a provider:
+
+```python
+import promptvc
+
+# Run prompt version with OpenAI
+result = promptvc.run(
+    name="translator",
+    version="v1",          # Can also use "latest"
+    provider="openai",     # openai, anthropic, gemini, ollama, mock
+    model="gpt-4o-mini",   # Optional model override
+    temperature=0.3,       # Optional sampling temperature
+    # Template variables are passed as keyword arguments:
+    language="Spanish",
+    text="Hello, world!"
+)
+
+if result.ok:
+    print(f"Output: {result.output}")
+    print(f"Total Tokens: {result.tokens}")
+    print(f"Latency: {result.latency_ms} ms")
+    if result.cost:
+        print(f"Cost USD: {result.cost_usd}")
+else:
+    print(f"Execution failed: {result.error}")
+```
+
+---
+
+### 7.3 Wrapper Decorator (`@prompt`)
+
+Power any Python function with a versioned prompt space using the `@promptvc.prompt` decorator. The function's keyword arguments will map directly to template variables, and the decorated function returns a `RunResult` object:
+
+```python
+import promptvc
+
+@promptvc.prompt("summarizer", version="latest", provider="anthropic", model="claude-3-5-sonnet")
+def summarize(text: str) -> promptvc.RunResult:
+    """This function is powered by promptvc 'summarizer' version 'latest'"""
+    pass
+
+# Invoke the function
+result = summarize(text="Prompt Version Control enforces immutability and version safety...")
+print(f"Summary: {result.output}")
+print(f"Model Used: {result.model}")
+```
+
+---
+
+### 7.4 Context Manager (`run_context`)
+
+Use the `run_context` context manager when you want granular execution control, automatic trace logging, or want to compute aggregate costs/latencies over dynamic sequences:
+
+```python
+import promptvc
+
+with promptvc.run_context("classifier", "v2", provider="gemini") as ctx:
+    # Run a classification task
+    result = ctx.run(text="The pizza was delicious!")
+    
+    print(f"Classified Output: {result.output}")
+    print(f"Context Latency: {ctx.latency_ms} ms")
+    if ctx.cost:
+        print(f"Accumulated Cost: {promptvc.format_cost(ctx.cost.total_cost_usd)}")
+```
+
+---
+
+### 7.5 Batch Execution (`batch_run`)
+
+To evaluate a prompt template across multiple input dictionaries in parallel, use `promptvc.batch_run()`. It executes tasks concurrently using a local thread pool:
+
+```python
+import promptvc
+
+inputs = [
+    {"text": "First article contents..."},
+    {"text": "Second article contents..."},
+    {"text": "Third article contents..."}
+]
+
+# Run all inputs in parallel using up to 4 worker threads
+batch_result = promptvc.batch_run(
+    name="summarizer",
+    version="v1",
+    inputs=inputs,
+    provider="openai",
+    max_workers=4
+)
+
+print(f"Success Rate: {batch_result.success_rate * 100}%")
+print(f"Total Combined Tokens: {batch_result.total_tokens}")
+if batch_result.total_cost_usd is not None:
+    print(f"Total Batch Cost: {promptvc.format_cost(batch_result.total_cost_usd)}")
+
+for idx, run_res in enumerate(batch_result.results):
+    print(f"\n[Run {idx+1}] Output: {run_res.output}")
+```
+
+---
+
+### 7.6 SDK Result Interfaces
+
+#### `RunResult`
+Returned by `run()`, `@prompt`, and individual items in `BatchResult`.
+* `.ok` (`bool`): True if execution succeeded.
+* `.output` (`str`): The raw text response from the model.
+* `.tokens` (`int` | `None`): Sum of input and output tokens.
+* `.input_tokens` (`int` | `None`): Tokens in prompt template.
+* `.output_tokens` (`int` | `None`): Tokens in completion response.
+* `.latency_ms` (`float`): Execution duration in milliseconds.
+* `.cost` (`CostBreakdown` | `None`): Detailed pricing model breakdown.
+* `.cost_usd` (`float` | `None`): Convenience getter for total USD cost.
+* `.model` (`str`): Model identifier used by the provider.
+* `.trace_id` (`str`): Unique trace GUID generated for telemetry lookup.
+* `.error` (`str` | `None`): Error traceback string if execution failed.
+
+#### `BatchResult`
+Returned by `batch_run()`.
+* `.results` (`List[RunResult]`): List of execution results (matches input order).
+* `.total_tokens` (`int`): Sum of all tokens consumed across the batch.
+* `.total_cost_usd` (`float` | `None`): Sum of all costs across the batch.
+* `.total_latency_ms` (`float`): Total wall-clock time elapsed for the batch sequence.
+* `.success_rate` (`float`): Percentage (0.0 to 1.0) of successful runs.
+* `.success_count` (`int`): Number of successful runs.
+* `.error_count` (`int`): Number of failed runs.
+
+---
+
+### 7.7 Low-level Core API (`PromptRepo`)
+
+If you need programmatic control over repository commands (such as initializing registries, committing prompt modifications, managing version locks, or computing prompt diffs):
 
 ```python
 from promptvc.core import PromptRepo
+from promptvc.utils.template import render_template
+from promptvc.core.diff import compute_diff, format_diff
 
-# Initialize repository. By default, it manages the local `.promptvc` directory.
+# 1. Load the Repository
+# By default, manages the local `.promptvc` directory in the current working directory.
 repo = PromptRepo()
-repo.init_repo()
-```
 
-### Registering and Accessing Prompts
+# Initialize if not already initialized
+if not repo.storage.is_initialized:
+    repo.init_repo()
 
-You can commit new prompt versions and retrieve existing ones programmatically:
-
-```python
-# Commit a prompt template with an optional validation schema
+# 2. Register & Commit a Prompt Version programmatically
 meta = repo.commit(
     name="translator",
     prompt="Translate this text to {{language}}: {{text}}",
@@ -478,63 +621,27 @@ meta = repo.commit(
     }
 )
 
-# Retrieve raw prompt templates (returns a string)
-prompt_template = repo.get("translator", "v1")
+# 3. Retrieve Prompt Template and Metadata
+# Returns the raw prompt string
+prompt_template = repo.get("translator", "v1") 
+# Returns dictionary containing version author, hash, lock status, and tokens
+version_meta = repo.get_version_meta("translator", "v1") 
 
-# Fetch latest version metadata
-latest_meta = repo.latest("translator")
-```
+# 4. Render template variables manually
+rendered = render_template(prompt_template, {"language": "French", "text": "Hello"})
+print(rendered) # "Translate this text to French: Hello"
 
-### Template Rendering
+# 5. Lock Stable Versions
+# Prevents further modifications or commits to "v1"
+repo.lock("translator", "v1")
 
-Render prompt templates by replacing template variables manually using the built-in renderer:
-
-```python
-from promptvc.utils.template import render_template
-
-variables = {
-    "language": "French",
-    "text": "Hello, world!"
-}
-rendered = render_template(prompt_template, variables)
-# Outputs: "Translate this text to French: Hello, world!"
-```
-
-### Running Prompts Programmatically
-
-You can run prompts using registered providers (like `OpenAIProvider`, `AnthropicProvider`, `GeminiProvider`, or `MockProvider`):
-
-```python
-from promptvc.providers.mock import MockProvider
-
-provider = MockProvider()
-run_result = provider.run(rendered)
-
-# Save execution run telemetry to registry logs
-repo.storage.append_run("translator", {
-    "version": "v1",
-    "output": run_result["output"],
-    "tokens": run_result["tokens"],
-    "timestamp": repo._utc_now_iso()
-})
-```
-
-### Comparing Versions & Locking
-
-You can programmatically compute prompt diffs and prevent modifications by locking stable prompt versions:
-
-```python
-from promptvc.core.diff import compute_diff, format_diff
-
-# Compare token differences
+# 6. Compute Prompt Differences
+# Get token metrics difference between two versions
 token_diff = repo.token_diff("translator", "v1", "v2")
 
-# Generate diff patch lines
+# Compute line-by-line unified diffs
 diff_lines = compute_diff("Hello world", "Hello beautiful world")
 print(format_diff(diff_lines))
-
-# Lock a version to prevent overwrite or deletion
-repo.lock("translator", "v1")
 ```
 
 See [examples/api_usage.py](file:///d:/prompt-version-control/examples/api_usage.py) for a complete runnable demonstration.
