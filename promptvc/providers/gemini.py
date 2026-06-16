@@ -76,6 +76,9 @@ class GeminiProvider(BaseProvider):
         temperature = kwargs.get("temperature")
         top_p = kwargs.get("top_p")
         top_k = kwargs.get("top_k")
+        system_prompt = kwargs.get("system_prompt")
+        timeout = kwargs.get("timeout", 60)
+        raw_messages = kwargs.get("messages")
         # Build contents list
         gemini_system = system_prompt
         if raw_messages is not None:
