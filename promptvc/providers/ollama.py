@@ -13,11 +13,11 @@ class OllamaProvider(BaseProvider):
     def run(self, prompt: str, **kwargs) -> Dict[str, Any]:
         model = kwargs.get("model", "llama3")
         timeout = kwargs.get("timeout", 60)
-        stream = kwargs.get("stream", False)
+        # Always use stream=False in run() — streaming is handled by stream() method
         payload = {
             "model": model,
             "prompt": prompt,
-            "stream": stream
+            "stream": False,
         }
 
         try:
@@ -43,16 +43,17 @@ class OllamaProvider(BaseProvider):
         except ValueError as e:
             raise RuntimeError(f"Failed to parse Ollama JSON response: {e}") from e
 
+        # Check for error before trusting the response field
+        if "error" in response_json:
+            raise RuntimeError(f"Ollama error: {response_json['error']}")
+
         if "response" not in response_json:
             raise RuntimeError(f"Invalid Ollama response: {response_json}")
         output = response_json.get("response") or ""
 
-        if "error" in response_json:
-            raise RuntimeError(f"Ollama error: {response_json['error']}")
-
-        prompt_tokens = response_json.get("prompt_eval_count", 0)
-        eval_tokens = response_json.get("eval_count", 0)
-        tokens = prompt_tokens + eval_tokens if (prompt_tokens or eval_tokens) else None
+        prompt_tokens = response_json.get("prompt_eval_count") or 0
+        eval_tokens = response_json.get("eval_count") or 0
+        tokens = (prompt_tokens + eval_tokens) if (prompt_tokens or eval_tokens) else None
 
         return {
             "output": output,

@@ -548,5 +548,5 @@ def batch_run(
     )
 
 
-# Re-export format_cost at top level for convenience
-format_cost = format_cost
+# Re-export format_cost at sdk level for convenience: `from promptvc.sdk import format_cost`
+# (already imported at top of module from promptvc.utils.cost)
